@@ -38,8 +38,17 @@ def group_cap(brief: TripBrief) -> int:
     return max(2, round(base * PACE_MULT[brief.pace]))
 
 
+FULL_DAY_MIN = 210  # longer than the morning window: the outing takes the whole day
+
+
+def is_full_day(p: Place) -> bool:
+    return p.duration_min > FULL_DAY_MIN
+
+
 def place_cost(p: Place) -> int:
-    return p.effort * math.ceil(p.duration_min / 60)
+    """Effort units. A full-day outing counts as four hours at its effort level."""
+    hours = 4 if is_full_day(p) else math.ceil(p.duration_min / 60)
+    return p.effort * hours
 
 
 def needs_long_rest(brief: TripBrief) -> bool:

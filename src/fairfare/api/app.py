@@ -143,6 +143,8 @@ def create_app(deps: Optional[Deps] = None) -> FastAPI:
 
     @app.get("/runs/{run_id}")
     def run_events(run_id: str) -> list[dict[str, Any]]:
+        if run_id.endswith(".jsonl"):
+            raise HTTPException(400, "bad run id")  # file paths are a CLI convenience, never an API input
         try:
             return tracing.load(run_id)
         except FileNotFoundError:

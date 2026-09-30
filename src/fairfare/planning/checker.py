@@ -28,6 +28,7 @@ def check_plan(plan: TripPlan, places: list[Place], notices: list[ClosureNotice]
     out: list[Violation] = []
     n_days = len(plan.days)
     alt_days: list[int] = []
+    full_days: list[int] = []
     for i, d in enumerate(plan.days):
         day = d.day.isoformat()
         acts = [b for b in d.blocks if b.kind == "activity"]
@@ -49,7 +50,10 @@ def check_plan(plan: TripPlan, places: list[Place], notices: list[ClosureNotice]
         role_cap = d.cap
         if load > role_cap:
             out.append(Violation("over_cap", day, f"Day load {load} exceeds cap {role_cap}."))
-        if d.role == "full":
+        full_day_outing = any(R.is_full_day(by_name[b.place]) for b in acts if b.place in by_name)
+        if full_day_outing:
+            full_days.append(i)
+        if d.role == "full" and not full_day_outing:
             if not any(b.kind == "meal" for b in d.blocks):
                 out.append(Violation("no_meal", day, "No meal block."))
             if R.needs_long_rest(brief) and not any(
@@ -65,7 +69,13 @@ def check_plan(plan: TripPlan, places: list[Place], notices: list[ClosureNotice]
                 out.append(Violation("no_transfer", day, f"No transfer between '{a.title}' and '{b.title}'."))
         if len(acts) > R.PACE_MAX_ACTIVITIES[brief.pace] and d.role == "full":
             out.append(Violation("too_many_activities", day, f"{len(acts)} activities exceeds the {brief.pace} pace."))
+    if R.needs_long_rest(brief):
+        for a, b in zip(full_days, full_days[1:]):
+            if b - a < 2:
+                out.append(Violation("consecutive_full_days", plan.days[b].day.isoformat(),
+                                     "Back-to-back full-day outings for older or limited-mobility travellers."))
     if R.altitude_sensitive(brief):
+        alt_days = sorted(set(alt_days))  # several high places on one day are one exposure day
         for a, b in zip(alt_days, alt_days[1:]):
             if b - a < 2:
                 out.append(Violation("altitude_back_to_back", plan.days[b].day.isoformat(),

@@ -58,3 +58,15 @@ def test_no_search_results_gives_visible_warning_not_silent_empty_plan(family, t
     r = run_plan(FakeExtractorLLM(), FixtureSearch({}), FixtureFetcher({}), family,
                  tracer=tracing.Tracer(directory=tmp_path))
     assert any("No verified places" in w for w in r["plan"].warnings)
+
+
+def test_example_brief_file_is_valid_and_pdf_degrades_gracefully(tmp_path):
+    import json
+    from pathlib import Path
+
+    from fairfare.models import TripBrief
+    from fairfare.pack import html_to_pdf
+
+    brief = TripBrief(**json.loads((Path(__file__).parents[1] / "examples" / "kazakhstan_family.json").read_text()))
+    assert len(brief.travellers) == 4 and brief.nights == 5
+    assert html_to_pdf("<h1>x</h1>", str(tmp_path / "x.pdf")) in (True, False)  # never raises

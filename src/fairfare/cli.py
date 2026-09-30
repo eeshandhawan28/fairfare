@@ -53,6 +53,15 @@ def cmd_plan(args: argparse.Namespace) -> None:
 def cmd_serve(args: argparse.Namespace) -> None:
     import uvicorn
 
+    if args.demo:  # offline synthetic world: try the whole UI with no network, keys or model
+        from fairfare.api.app import Deps, create_app
+        from fairfare.demo import FakeExtractorLLM, demo_world
+
+        search, fetcher = demo_world()
+        print("DEMO MODE: fixture pages and a stand-in extractor; results are synthetic.")
+        uvicorn.run(create_app(Deps(llm=FakeExtractorLLM(), search=search, fetcher=fetcher)),
+                    host=args.host, port=args.port)
+        return
     uvicorn.run("fairfare.api.app:create_app", factory=True, host=args.host, port=args.port)
 
 
@@ -125,6 +134,7 @@ def main() -> None:
     sv = sub.add_parser("serve", help="run the API")
     sv.add_argument("--host", default="127.0.0.1")
     sv.add_argument("--port", type=int, default=8000)
+    sv.add_argument("--demo", action="store_true", help="offline synthetic demo, no keys or network")
     sv.set_defaults(func=cmd_serve)
 
     t = sub.add_parser("traces", help="inspect and review run traces")

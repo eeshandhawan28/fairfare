@@ -4,6 +4,7 @@ from __future__ import annotations
 import html
 from typing import Optional
 
+from fairfare import tracing
 from fairfare.models import Claim, TripPlan
 from fairfare.research import domain
 
@@ -101,12 +102,16 @@ def html_to_pdf(html_text: str, path: str) -> bool:
         from playwright.sync_api import sync_playwright
     except ImportError:
         return False
-    with sync_playwright() as p:
-        browser = p.chromium.launch()
-        try:
-            page = browser.new_page()
-            page.set_content(html_text)
-            page.pdf(path=path, format="A4", print_background=True)
-        finally:
-            browser.close()
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            try:
+                page = browser.new_page()
+                page.set_content(html_text)
+                page.pdf(path=path, format="A4", print_background=True)
+            finally:
+                browser.close()
+    except Exception as exc:  # browser binary missing etc.: caller falls back to HTML
+        tracing.event("pdf_failed", error=f"{type(exc).__name__}: {exc}")
+        return False
     return True

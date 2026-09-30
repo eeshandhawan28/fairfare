@@ -72,7 +72,7 @@ def test_must_do_and_hidden_gem_rank_first():
 
 
 def test_checker_flags_hand_broken_plans():
-    places = [P("A", effort=3, minutes=240), P("B", effort=3, minutes=240)]
+    places = [P("A", effort=3, minutes=120), P("B", effort=3, minutes=120)]
     plan = Planner(brief(ages=(70, 30)), places, []).plan()
     d = plan.days[1]
     d.blocks = [
@@ -93,3 +93,58 @@ def test_repair_loop_removes_offender_and_replans():
     assert not [v for v in violations if v.rule == "closed_place"]
     days = {d.day.day: {b.place for b in d.blocks} for d in plan.days}
     assert "Later Closed" not in days[21] and "Later Closed" not in days[22]
+
+
+def test_full_day_outing_gets_its_own_day_and_is_never_silently_dropped():
+    places = [P("Big Trip", effort=1, minutes=300, city="Far"), P("Small", minutes=60)]
+    plan = Planner(brief(ages=(30, 30)), places, []).plan()
+    day = next(d for d in plan.days if any(b.place == "Big Trip" for b in d.blocks))
+    acts = [b for b in day.blocks if b.kind == "activity"]
+    assert [b.place for b in acts] == ["Big Trip"] and "Full-day outing" in acts[0].notes
+    assert not check_plan(plan, places, [])
+    assert day.load == 4  # counted as four hours at effort 1, matching the checker
+
+
+def test_strenuous_full_day_is_excluded_for_older_travellers():
+    plan = Planner(brief(ages=(60, 30)), [P("Hard Trek", effort=3, minutes=480)], []).plan()
+    assert not any(b.kind == "activity" for d in plan.days for b in d.blocks)
+    assert any("No verified activity fits" in w for w in plan.warnings)
+
+
+def test_every_planned_activity_fits_and_load_matches_blocks():
+    places = [P(f"Place{i}", minutes=m) for i, m in enumerate([60, 90, 120, 180, 300, 45, 75, 150])]
+    plan = Planner(brief(), places, []).plan()
+    for d in plan.days:
+        acts = [b for b in d.blocks if b.kind == "activity"]
+        expected = sum(R.place_cost(next(p for p in places if p.name == b.place)) for b in acts)
+        assert d.load == expected, f"{d.day}: load {d.load} does not match scheduled {expected}"
+    assert not check_plan(plan, places, [])
+
+
+def test_randomised_plans_never_violate_the_checker():
+    """200 random families and place sets: the scheduler's output must always pass the independent checker."""
+    import random
+
+    rng = random.Random(7)
+    kinds = ["sight", "nature", "food", "market", "adventure"]
+    for n in range(200):
+        ages = [rng.choice([6, 12, 17, 24, 35, 52, 58, 66, 72]) for _ in range(rng.randint(1, 5))]
+        b = brief(ages=tuple(ages), pace=rng.choice(["relaxed", "balanced", "packed"]), limited=rng.random() < 0.2)
+        places = [P(f"P{i}", effort=rng.randint(1, 3), minutes=rng.choice([45, 60, 90, 120, 180, 240, 360, 480]),
+                    city=rng.choice(["A", "B", "C"]), alt=rng.choice([None, None, 1500, 2300, 3100]),
+                    kind=rng.choice(kinds), min_age=rng.choice([None, None, 8, 16])) for i in range(rng.randint(0, 14))]
+        notices = [ClosureNotice(venue="P1", keywords=["p1"], closed_from=date(2026, 10, rng.randint(19, 24)),
+                                 closed_to=None, source="s")] if rng.random() < 0.5 else []
+        plan, violations, _ = plan_with_repair(b, places, notices)
+        bad = violations
+        assert not bad, f"case {n}: {[(v.rule, v.message) for v in bad]}"
+
+
+def test_no_back_to_back_full_day_outings_for_older_travellers():
+    places = [P(f"Trip{i}", effort=1, minutes=300, city=f"C{i}") for i in range(4)]
+    plan = Planner(brief(), places, []).plan()
+    idx = [i for i, d in enumerate(plan.days) if any(b.place and b.place.startswith("Trip") for b in d.blocks)]
+    assert len(idx) >= 2 and all(b - a >= 2 for a, b in zip(idx, idx[1:]))
+    young = Planner(brief(ages=(20, 22)), places, []).plan()
+    yidx = [i for i, d in enumerate(young.days) if any(b.place and b.place.startswith("Trip") for b in d.blocks)]
+    assert len(yidx) >= len(idx)

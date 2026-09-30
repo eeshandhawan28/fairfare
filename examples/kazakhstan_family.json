@@ -1,0 +1,18 @@
+{
+  "destination": "Kazakhstan",
+  "start": "2026-10-19",
+  "end": "2026-10-24",
+  "origin": "Bengaluru",
+  "passport": "Indian",
+  "budget_tier": "comfort",
+  "pace": "balanced",
+  "interests": ["nature", "food"],
+  "must_do": [],
+  "avoid": [],
+  "travellers": [
+    {"name": "Parent A", "age": 58, "mobility": "full"},
+    {"name": "Parent B", "age": 55, "mobility": "full"},
+    {"name": "Adult", "age": 24, "mobility": "full"},
+    {"name": "Teen", "age": 17, "mobility": "full"}
+  ]
+}

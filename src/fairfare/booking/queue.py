@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -24,6 +25,8 @@ class BookingQueue:
         self.dir.mkdir(parents=True, exist_ok=True)
 
     def _path(self, rid: str) -> Path:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", rid):
+            raise KeyError(rid)
         return self.dir / f"{rid}.json"
 
     def save(self, req: BookingRequest) -> BookingRequest:

@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextvars
 import json
 import os
+import re
 import time
 import uuid
 from contextlib import contextmanager
@@ -104,8 +105,13 @@ def event(name: str, **data: Any) -> None:
         tracer.event(name, **data)
 
 
+SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
+
+
 def load(run: str, directory: Optional[Path] = None) -> list[dict[str, Any]]:
     d = Path(directory) if directory else trace_dir()
+    if not run.endswith(".jsonl") and not SAFE_ID.match(run):
+        raise FileNotFoundError(f"invalid run id '{run}'")  # ids never contain path separators
     path = Path(run) if run.endswith(".jsonl") else d / f"{run}.jsonl"
     if not path.exists():
         matches = sorted(d.glob(f"{run}*.jsonl"))

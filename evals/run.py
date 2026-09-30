@@ -18,8 +18,43 @@ from fairfare.models import TripBrief
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def run_plan_case(case: dict) -> bool:
+    """Live plan eval: needs web access (search + fetch) and a real model."""
+    from fairfare.planning.graph import run_plan
+    from fairfare.tools.fetch import CachedFetcher, HttpFetcher
+    from fairfare.tools.search import get_search
+
+    brief = TripBrief(**json.loads((ROOT / case["brief_file"]).read_text()))
+    r = run_plan(LiteLLMClient(), get_search(), CachedFetcher(HttpFetcher()), brief,
+                 static_notices=load_closures(), eval_case=case["name"])
+    print(f"  trace: {r['run_id']}")
+    plan, exp, ok = r["plan"], case["expect"], True
+    acts = [(d.day, b) for d in plan.days for b in d.blocks if b.kind == "activity"]
+
+    def check(label: str, cond: bool) -> None:
+        nonlocal ok
+        ok &= cond
+        print(f"  {label}: {'PASS' if cond else 'FAIL'}")
+
+    for key, iso in exp.get("never_scheduled_from", {}).items():
+        check(f"'{key}' not scheduled from {iso}",
+              not any(key in (b.place or "").lower() and day.isoformat() >= iso for day, b in acts))
+    if "min_activities" in exp:
+        check(f"at least {exp['min_activities']} activities", len(acts) >= exp["min_activities"])
+    if exp.get("all_activities_cited"):
+        check("every activity has a source", all(b.sources for _, b in acts))
+    if exp.get("visa_has_official_source"):
+        check("visa answer from an official source", any(c.data.get("official") for c in plan.visa))
+    if exp.get("no_high_severity_plan_violations"):
+        check("no closed/unverified places in plan", not any(
+            v.rule in ("closed_place", "unverified_place") for v in r["violations"]))
+    return ok
+
+
 def run_case(path: Path) -> bool:
     case = json.loads(path.read_text())
+    if case.get("type") == "plan":
+        return run_plan_case(case)
     brief = TripBrief(
         destination="Kazakhstan",
         start=date.fromisoformat(case["start"]),
@@ -46,7 +81,10 @@ def run_case(path: Path) -> bool:
 
 def main() -> int:
     failed = 0
+    only = sys.argv[1] if len(sys.argv) > 1 else ""  # e.g. `python evals/run.py plan` to pick cases
     for path in sorted((ROOT / "evals" / "cases").glob("*.json")):
+        if only not in path.stem:
+            continue
         print(path.stem)
         if not run_case(path):
             failed += 1

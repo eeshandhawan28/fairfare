@@ -68,3 +68,9 @@ def test_booking_flow_enforces_approval(client):
     assert link.startswith("https://wa.me/")
     assert client.post("/bookings/zzz/approve", json={"by": "x"}).status_code == 404
     assert client.post(f"/bookings/{rid}/reply", json={"text": "Deposit needed"}).json()["reply_summary"]["asks_for_payment"]
+
+
+def test_path_traversal_ids_are_rejected(client):
+    for bad in ("..%2F..%2Fetc%2Fpasswd", "x.jsonl", "a%00b"):
+        assert client.get(f"/runs/{bad}").status_code in (400, 404, 422)
+    assert client.post("/bookings/..%2Fx/approve", json={"by": "x"}).status_code in (404, 405, 422)

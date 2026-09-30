@@ -1,0 +1,13 @@
+{
+  "name": "plan_kazakhstan_family",
+  "type": "plan",
+  "description": "Live end-to-end plan for the example family. Needs web access and a real model.",
+  "brief_file": "examples/kazakhstan_family.json",
+  "expect": {
+    "never_scheduled_from": {"shymbulak": "2026-10-19"},
+    "min_activities": 4,
+    "all_activities_cited": true,
+    "visa_has_official_source": true,
+    "no_high_severity_plan_violations": true
+  }
+}

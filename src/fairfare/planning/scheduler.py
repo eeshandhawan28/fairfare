@@ -26,6 +26,34 @@ def eligible(p: Place, brief: TripBrief) -> str | None:
     return None
 
 
+def windows_for(role: str, brief: TripBrief) -> list[tuple[int, int]]:
+    if role == "arrival":
+        return [(16 * 60, R.DAY_END)]
+    if role == "departure":
+        return [(R.DAY_START, 11 * 60 + 30)]
+    return [(R.DAY_START, R.LUNCH[0]), (R.rest_window(brief)[1], R.DAY_END)]
+
+
+def place_all(picks: list[Place], windows: list[tuple[int, int]]) -> tuple[list[tuple[Place, int, int, int]], bool]:
+    """Assign picks to time windows in order. Returns ([(place, transfer_start, begin, end)], all_fit)."""
+    placed: list[tuple[Place, int, int, int]] = []
+    wi, cursor, prev_city, first = 0, windows[0][0], "", True
+    for p in picks:
+        while True:
+            if wi >= len(windows):
+                return placed, False
+            wstart, wend = windows[wi]
+            cursor = max(cursor, wstart)
+            t = 0 if first else R.transfer_minutes(prev_city, p.city)
+            begin, end = cursor + t, cursor + t + p.duration_min
+            if end <= wend:
+                placed.append((p, cursor, begin, end))
+                cursor, prev_city, first = end, p.city, False
+                break
+            wi += 1
+    return placed, True
+
+
 class Planner:
     def __init__(self, brief: TripBrief, places: list[Place], notices: list[ClosureNotice],
                  exclude: set[str] | None = None) -> None:
@@ -47,30 +75,47 @@ class Planner:
         days = R.trip_days(self.brief)
         used: set[str] = set()
         last_alt_index = -10
+        last_full_index = -10
         out: list[DayPlan] = []
         for i, day in enumerate(days):
             role = R.role_of(i, len(days))
-            picks, cap = self._pick(day, i, len(days), role, used, last_alt_index)
+            picks, cap = self._pick(day, i, len(days), role, used, last_alt_index, last_full_index)
+            if picks and R.is_full_day(picks[0]):
+                last_full_index = i
             if any((p.altitude_m or 0) >= R.ALTITUDE_M for p in picks):
                 last_alt_index = i
             used.update(p.name for p in picks)
             dp = self._layout(day, role, picks, cap)
             dp.plan_b = self._plan_b(day, used)
             out.append(dp)
+        rank = {"low": 0, "medium": 1, "high": 2}
+        best: dict[tuple, ClosureNotice] = {}
         for n in self.notices:
             for p in self.candidates:
                 if any(k in p.name.lower() or p.name.lower() in k for k in n.keywords if k) and \
                         n.overlaps(self.brief.start, self.brief.end):
-                    end = n.closed_to.isoformat() if n.closed_to else "reopening date not stated"
-                    self.warnings.append(
-                        f"{p.name} is reported closed from {n.closed_from.isoformat()} ({end}); kept off those days "
-                        f"[{n.confidence} confidence]. Confirm with the operator.")
+                    key = (p.name, n.closed_from)
+                    if key not in best or (rank[n.confidence], n.closed_to is not None) > \
+                            (rank[best[key].confidence], best[key].closed_to is not None):
+                        best[key] = n
+        for (name, _), n in best.items():
+            end = f"until {n.closed_to.isoformat()}" if n.closed_to else "reopening date not stated"
+            self.warnings.append(
+                f"{name} is reported closed from {n.closed_from.isoformat()} ({end}); kept off those days "
+                f"[{n.confidence} confidence]. Confirm with the operator.")
+        empty = [d.day.strftime("%d %b") for d in out if d.role == "full" and not any(
+            b.kind == "activity" for b in d.blocks)]
+        if empty:
+            self.warnings.append(
+                f"No verified activity fits on {', '.join(empty)}. Research found {len(self.candidates)} usable "
+                "place(s); add must-dos, loosen the pace, or re-run with more search coverage.")
         return TripPlan(brief=self.brief, days=out, warnings=sorted(set(self.warnings)), closures=self.notices,
                         places=[p for p in self.candidates])
 
     # ---- selection ----
 
-    def _pick(self, day: date, i: int, n: int, role: str, used: set[str], last_alt: int) -> tuple[list[Place], int]:
+    def _pick(self, day: date, i: int, n: int, role: str, used: set[str], last_alt: int,
+              last_full: int = -10) -> tuple[list[Place], int]:
         cap = R.group_cap(self.brief)
         if role != "full":
             cap = max(1, round(cap * R.ARRIVAL_DEPARTURE_FACTOR))
@@ -91,10 +136,20 @@ class Planner:
             cost = R.place_cost(p)
             if spent + cost > cap:
                 continue
+            if R.is_full_day(p) and (picks or role != "full"):
+                continue  # a full-day outing needs a whole ordinary day to itself
+            if R.is_full_day(p) and R.needs_long_rest(self.brief) and i - last_full < 2:
+                continue  # no back-to-back full-day outings for older or limited-mobility travellers
+            if picks and R.is_full_day(picks[0]):
+                continue
+            if not R.is_full_day(p):
+                tentative = sorted(picks + [p], key=lambda x: -x.effort)  # strenuous in the morning
+                if not place_all(tentative, windows_for(role, self.brief))[1]:
+                    continue  # would not fit the day's time windows
             picks.append(p)
             spent += cost
             city = city or p.city
-        picks.sort(key=lambda p: -p.effort)  # strenuous in the morning
+        picks.sort(key=lambda p: -p.effort)
         return picks, cap
 
     def _plan_b(self, day: date, used: set[str]) -> str:
@@ -110,43 +165,40 @@ class Planner:
         blocks: list[Block] = []
         rest_a, rest_b = R.rest_window(self.brief)
         load = sum(R.place_cost(p) for p in picks)
-        if role == "arrival":
-            blocks.append(Block(start="12:00", end="15:00", kind="arrival",
-                                title="Arrive, transfer to hotel, check in", notes="Adjust to your flight times."))
-            self._activities(blocks, picks, 16 * 60, R.DAY_END, "")
-        elif role == "departure":
-            self._activities(blocks, picks, R.DAY_START, 11 * 60 + 30, "")
-            blocks.append(Block(start="12:00", end="13:00", kind="departure",
-                                title="Transfer to airport", notes="Leave at least 3 hours before departure."))
+        if role != "full":
+            if role == "arrival":
+                blocks.append(Block(start="12:00", end="15:00", kind="arrival",
+                                    title="Arrive, transfer to hotel, check in", notes="Adjust to your flight times."))
+            self._emit(blocks, picks, windows_for(role, self.brief))
+            if role == "departure":
+                blocks.append(Block(start="12:00", end="13:00", kind="departure",
+                                    title="Transfer to airport", notes="Leave at least 3 hours before departure."))
+        elif picks and R.is_full_day(picks[0]):
+            p = picks[0]
+            start = 9 * 60
+            end = min(start + p.duration_min, R.DINNER[0] - 30)
+            note = "Full-day outing: start early, allow extra time for the drive, take lunch on the way. "
+            if (p.altitude_m or 0) >= R.ALTITUDE_M:
+                note += f"Altitude about {p.altitude_m} m. "
+            blocks.append(Block(start=R.hm(start), end=R.hm(end), kind="activity", title=p.name, place=p.name,
+                                notes=(note + p.notes).strip(), sources=p.sources))
         else:
-            self._activities(blocks, picks, R.DAY_START, R.LUNCH[0], "")
+            self._emit(blocks, picks, windows_for(role, self.brief))
             blocks.append(Block(start=R.hm(R.LUNCH[0]), end=R.hm(R.LUNCH[1]), kind="meal", title="Lunch"))
             blocks.append(Block(start=R.hm(rest_a), end=R.hm(rest_b), kind="rest", title="Rest at the hotel"))
-            afternoon_start = rest_b
-            # anything that did not fit in the morning window goes after the rest
-            placed = {b.place for b in blocks if b.kind == "activity"}
-            rest = [p for p in picks if p.name not in placed]
-            self._activities(blocks, rest, afternoon_start, R.DAY_END, "")
         if role != "departure":
             blocks.append(Block(start=R.hm(R.DINNER[0]), end=R.hm(R.DINNER[1]), kind="meal", title="Dinner"))
         blocks.sort(key=lambda b: R.mins(b.start))
         return DayPlan(day=day, role=role, blocks=blocks, load=load, cap=cap)  # type: ignore[arg-type]
 
-    def _activities(self, blocks: list[Block], picks: list[Place], start: int, limit: int, _: str) -> None:
-        cursor, prev_city = start, ""
-        for p in picks:
-            t = R.transfer_minutes(prev_city, p.city) if prev_city or blocks else 0
-            has_prior_activity = any(b.kind == "activity" for b in blocks)
-            begin = cursor + (t if has_prior_activity else 0)
-            end = begin + p.duration_min
-            if end > limit:
-                continue
-            if has_prior_activity:
-                blocks.append(Block(start=R.hm(cursor), end=R.hm(begin), kind="transfer",
-                                    title=f"Transfer to {p.name}"))
+    def _emit(self, blocks: list[Block], picks: list[Place], windows: list[tuple[int, int]]) -> None:
+        placed, ok = place_all(picks, windows)
+        assert ok, "picks were verified to fit; layout must agree"
+        for i, (p, cursor, begin, end) in enumerate(placed):
+            if i > 0:
+                blocks.append(Block(start=R.hm(cursor), end=R.hm(begin), kind="transfer", title=f"Transfer to {p.name}"))
             note = f"{p.city}. " if p.city else ""
             if (p.altitude_m or 0) >= R.ALTITUDE_M:
                 note += f"Altitude about {p.altitude_m} m: go slowly, carry water. "
             blocks.append(Block(start=R.hm(begin), end=R.hm(end), kind="activity", title=p.name, place=p.name,
                                 notes=(note + p.notes).strip(), sources=p.sources))
-            cursor, prev_city = end, p.city
