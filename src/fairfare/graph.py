@@ -88,6 +88,8 @@ def run_audit(
         findings = result.get("findings", [])
         tracer.end(status="ok", lines=len(result.get("lines", [])),
                    findings=len(findings),
-                   high=sum(1 for f in findings if f.severity == "high"))
+                   high=sum(1 for f in findings if f.severity == "high"),
+                   price_findings=sum(1 for f in findings if f.kind == "price"),
+                   closure_findings=sum(1 for f in findings if f.kind == "closure"))
     result["run_id"] = tracer.run_id
     return result

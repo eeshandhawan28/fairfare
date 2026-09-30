@@ -24,11 +24,11 @@ def parse_quote(llm: LLM, quote_text: str) -> list[QuoteLine]:
     if isinstance(data, dict):
         data = data.get("lines", [])
     lines: list[QuoteLine] = []
-    dropped = 0
+    dropped: list = []
     for entry in data:
         try:
             lines.append(QuoteLine(**entry))
         except (ValidationError, TypeError):
-            dropped += 1  # drop malformed rows rather than guess
-    tracing.event("parse_result", parsed=len(lines), dropped=dropped)
+            dropped.append(entry)  # drop rows with no usable item rather than guess
+    tracing.event("parse_result", parsed=len(lines), dropped=len(dropped), dropped_rows=str(dropped))
     return lines

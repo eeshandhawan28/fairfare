@@ -52,3 +52,16 @@ def test_report_lists_high_severity_first():
 
 def test_extract_json_ignores_chatter():
     assert extract_json('sure! [{"a": 1}] done') == [{"a": 1}]
+
+
+def test_unreadable_amount_still_gets_closure_check():
+    class BadAmountLLM:
+        def complete(self, agent, system, user):
+            return json.dumps([{"item": "Shymbulak ski day", "category": "activity", "amount": "six thousand"}])
+
+    brief = TripBrief(destination="Kazakhstan", start=date(2026, 10, 19), end=date(2026, 10, 24))
+    result = build_graph(BadAmountLLM(), load_reference_prices(), load_closures()).invoke(
+        {"quote_text": "q", "brief": brief})
+    kinds = {(f.kind, f.severity) for f in result["findings"]}
+    assert ("closure", "high") in kinds  # closure caught despite the unreadable amount
+    assert ("price", "warn") in kinds  # and the missing amount is called out

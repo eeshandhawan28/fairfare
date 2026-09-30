@@ -17,6 +17,13 @@ def _match(line: QuoteLine, refs: list[ReferencePrice]) -> ReferencePrice | None
 def check_prices(lines: list[QuoteLine], refs: list[ReferencePrice]) -> list[Finding]:
     findings: list[Finding] = []
     for line in lines:
+        if line.amount is None:
+            findings.append(
+                Finding(severity="warn", kind="price", line=line.item,
+                        message="Quote gives no readable amount for this line; ask the agent for it.",
+                        confidence="high")
+            )
+            continue
         ref = _match(line, refs)
         if ref is None:
             findings.append(

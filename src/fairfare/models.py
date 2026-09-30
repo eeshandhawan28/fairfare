@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class Traveller(BaseModel):
@@ -26,9 +26,20 @@ class TripBrief(BaseModel):
 class QuoteLine(BaseModel):
     item: str
     category: Literal["flight", "stay", "transfer", "activity", "other"] = "other"
-    amount: float
+    amount: Optional[float] = None  # None when the quote gives no usable number
     currency: str = "INR"
     note: str = ""
+
+    @field_validator("amount", mode="before")
+    @classmethod
+    def _numeric_or_none(cls, v):
+        """An unreadable amount must not delete the line: closure checks still need its name."""
+        if v is None or isinstance(v, bool):
+            return None
+        try:
+            return float(str(v).replace(",", ""))
+        except ValueError:
+            return None
 
 
 class Finding(BaseModel):

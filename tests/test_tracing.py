@@ -45,7 +45,7 @@ def test_lint_flags_zero_line_parse(tmp_path):
 
 
 def test_lint_flags_dropped_rows_and_low_coverage(tmp_path):
-    reply = json.dumps([{"item": "Mystery fee", "amount": 100}, {"item": "bad row"}])
+    reply = json.dumps([{"item": "Mystery fee", "amount": 100}, {"amount": 5}])
     _, events = _run(tmp_path, reply)
     problems = " ".join(i["problem"] for i in lint_trace(events))
     assert "dropped" in problems

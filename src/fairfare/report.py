@@ -7,7 +7,7 @@ LABEL = {"high": "ACT NOW", "warn": "CHECK", "info": "NOTE"}
 
 
 def render_report(brief: TripBrief, lines: list[QuoteLine], findings: list[Finding]) -> str:
-    total = sum(line.amount for line in lines)
+    total = sum(line.amount or 0 for line in lines)
     currency = lines[0].currency if lines else "INR"
     out = [
         f"# Quote audit: {brief.destination}",
