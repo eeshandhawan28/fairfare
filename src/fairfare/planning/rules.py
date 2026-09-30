@@ -61,7 +61,8 @@ def place_cost(p: Place) -> int:
 
 
 def needs_long_rest(brief: TripBrief) -> bool:
-    return any(t.age >= 50 or t.mobility == "limited" for t in brief.travellers)
+    """Older travellers, limited mobility, or a small child who needs a nap."""
+    return any(t.age >= 50 or t.age < 6 or t.mobility == "limited" for t in brief.travellers)
 
 
 def altitude_sensitive(brief: TripBrief) -> bool:

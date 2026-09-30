@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import threading
+from pathlib import Path
 from datetime import datetime, timezone
 
 from fairfare import tracing
@@ -20,6 +22,13 @@ from fairfare.tools.search import SearchResult
 
 CLI_TIMEOUT = int(os.getenv("FAIRFARE_CLI_TIMEOUT", "180"))
 _SLOTS = threading.BoundedSemaphore(int(os.getenv("FAIRFARE_CLI_CONCURRENCY", "5")))
+
+
+class LLMUnavailable(RuntimeError):
+    """The model cannot be reached at all (usage limit, outage). Fatal for a run; never a data problem."""
+
+
+LIMIT_RE = re.compile(r"hit your (session|usage|weekly)? ?limit|usage limit|rate limit|resets \d", re.I)
 
 
 def run_claude(prompt: str, model: str = "haiku", system: str | None = None, tools: str = "",
@@ -32,11 +41,25 @@ def run_claude(prompt: str, model: str = "haiku", system: str | None = None, too
         cmd += ["--tools", ""]
     if system:
         cmd += ["--system-prompt", system]
+    key = None
+    cache_dir = os.getenv("FAIRFARE_LLM_CACHE")
+    if cache_dir:
+        import hashlib
+        key = Path(cache_dir) / (hashlib.sha256("\x00".join([model, system or "", tools, prompt]).encode()).hexdigest() + ".txt")
+        if key.exists():
+            return key.read_text()
     with _SLOTS:
         p = subprocess.run(cmd, input=prompt, capture_output=True, text=True, timeout=timeout, cwd="/tmp")
     if p.returncode != 0:
         raise RuntimeError(f"claude CLI failed ({p.returncode}): {(p.stderr or p.stdout).strip()[:300]}")
-    return p.stdout.strip()
+    out = p.stdout.strip()
+    if LIMIT_RE.search(out) and len(out) < 300:
+        # exit code 0 with a quota notice as the "answer": never let it be parsed as model output
+        raise LLMUnavailable(out)
+    if key is not None and out:
+        key.parent.mkdir(parents=True, exist_ok=True)
+        key.write_text(out)
+    return out
 
 
 def _json_from(text: str):

@@ -100,7 +100,8 @@ def run_audit(
     with tracing.use(tracer):
         traced = TracedLLM(llm)
         researcher = Researcher(traced, search, fetcher) if search and fetcher else None
-        graph = build_graph(traced, refs, notices, researcher)
+        from fairfare.data import notices_for
+        graph = build_graph(traced, refs, notices_for(brief.destination, notices), researcher)
         try:
             result = graph.invoke({"quote_text": quote_text, "brief": brief})
         except Exception as exc:

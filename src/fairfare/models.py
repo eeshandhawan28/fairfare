@@ -110,6 +110,7 @@ class ClosureNotice(BaseModel):
     """A dated closure or maintenance notice for a venue."""
 
     venue: str
+    destination: str = ""  # empty = applies anywhere
     keywords: list[str]
     closed_from: date
     closed_to: Optional[date] = None  # None = reopening date not stated

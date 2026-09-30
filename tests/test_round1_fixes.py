@@ -98,3 +98,23 @@ def test_quote_gaps_flag_missing_items():
     lines = [QuoteLine(item="Hotel", category="stay", amount=1000)]
     f = check_gaps(lines)
     assert f and "insurance" in f[0].message
+
+
+def test_static_closures_do_not_leak_across_destinations():
+    from fairfare.data import load_closures, notices_for
+    n = load_closures()
+    assert n and notices_for("Almaty, Kazakhstan", n)
+    assert notices_for("Lisbon, Portugal", n) == []
+
+
+def test_usage_limit_notice_is_fatal_not_data(monkeypatch):
+    import subprocess
+    import pytest
+    from fairfare import claude_cli
+
+    class R:
+        returncode, stdout, stderr = 0, "You've hit your session limit · resets 7:50pm (Asia/Kolkata)", ""
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: R())
+    with pytest.raises(claude_cli.LLMUnavailable):
+        claude_cli.run_claude("hi")

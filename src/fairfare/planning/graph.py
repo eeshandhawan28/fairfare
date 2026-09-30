@@ -136,7 +136,8 @@ def run_plan(llm: LLM, search: SearchProvider, fetcher: Fetcher, brief: TripBrie
                                       end=str(brief.end), travellers=len(brief.travellers), **meta)
     with tracing.use(tracer):
         researcher = Researcher(TracedLLM(llm), search, fetcher)
-        graph = build_plan_graph(researcher, static_notices or [])
+        from fairfare.data import notices_for
+        graph = build_plan_graph(researcher, notices_for(brief.destination, static_notices or []))
         try:
             state = graph.invoke({"brief": brief})
         except Exception as exc:

@@ -33,9 +33,17 @@ def template(req: BookingRequest) -> str:
                 f"для {req.party_size} человек{ages_ru}.{extra} Подскажите, пожалуйста, наличие, полную стоимость "
                 f"в тенге или рупиях и условия отмены. Спасибо!")
     extra = f" {req.notes}" if req.notes else ""
+    needs = []
+    if req.kind == "hotel":
+        if any(a <= 4 for a in req.party_ages):
+            needs.append("Could you provide a cot for a small child?")
+        if any(a >= 65 for a in req.party_ages):
+            needs.append("If possible we would like a lift-accessible or ground-floor room without stairs.")
+        needs.append("Is breakfast included, and what is the check-in time?")
+    ask = (" " + " ".join(needs)) if needs else ""
     return (f"Hello! We would like to ask whether you have {KIND_EN[req.kind]} available for {dates} "
-            f"for {req.party_size} people{ages}.{extra} Could you tell us availability, the total price "
-            f"including all taxes and fees, and your cancellation terms? Thank you.")
+            f"for {req.party_size} people{ages}.{extra}{ask} Could you tell us availability, the price per night "
+            f"and the total including all taxes and fees, and your cancellation terms? Thank you.")
 
 
 def required_facts(req: BookingRequest) -> list[str]:

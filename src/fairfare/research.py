@@ -88,6 +88,8 @@ class Researcher:
                 try:
                     results = self.search.search(q, n=self.pages_per_query + 2)
                 except Exception as exc:
+                    if type(exc).__name__ == "LLMUnavailable":
+                        raise  # a dead model must fail the run loudly, not produce an empty plan
                     tracing.event("search_failed", query=q, error=f"{type(exc).__name__}: {exc}")
                     continue
                 if getattr(self.search, "digest_mode", False) and results:

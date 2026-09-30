@@ -16,3 +16,8 @@ def load_reference_prices(path: Path | None = None) -> list[ReferencePrice]:
 def load_closures(path: Path | None = None) -> list[ClosureNotice]:
     raw = json.loads((path or DATA_DIR / "closures.json").read_text())
     return [ClosureNotice(**r) for r in raw]
+
+
+def notices_for(destination: str, notices: list[ClosureNotice]) -> list[ClosureNotice]:
+    """A closure notice for another destination says nothing about this trip."""
+    return [n for n in notices if not n.destination or n.destination.lower() in destination.lower()]
