@@ -134,7 +134,8 @@ class HttpFetcher:
             rec["chars"] = len(text)
             rec["method"] = method
             if not text:
-                raise RuntimeError(f"could not fetch readable text from {url}")
+                cause = rec.get("browser_error") or rec.get("http_error") or "page had no readable text"
+                raise RuntimeError(f"could not fetch readable text from {url}: {cause}")
             return Page(url=url, text=text, retrieved_at=_now(), method=method)
 
 

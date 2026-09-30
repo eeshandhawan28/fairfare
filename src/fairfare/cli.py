@@ -169,7 +169,20 @@ def main() -> None:
         for f in need.get(args.action, ()):
             if not getattr(args, f):
                 p.error(f"book {args.action} needs --{f}" if f not in ("id",) else f"book {args.action} needs an id")
-    args.func(args)
+    try:
+        args.func(args)
+    except KeyboardInterrupt:
+        raise SystemExit(130)
+    except Exception as exc:  # readable failure instead of a LangGraph/LiteLLM traceback
+        if os.getenv("FAIRFARE_DEBUG"):
+            raise
+        name = type(exc).__name__
+        hint = ""
+        if "Connection" in name or "Connection refused" in str(exc):
+            hint = ("\nHint: no LLM reachable. Start Ollama (`ollama serve`; `ollama pull qwen2.5:7b`) "
+                    "or set FAIRFARE_MODEL and the provider's API key.")
+        raise SystemExit(f"fairfare {args.cmd} failed: {name}: {str(exc).splitlines()[0][:300]}{hint}"
+                         "\n(set FAIRFARE_DEBUG=1 for the full traceback)")
 
 
 if __name__ == "__main__":
