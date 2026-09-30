@@ -14,6 +14,8 @@ from pydantic import BaseModel
 
 from fairfare import tracing
 
+MAX_BYTES = 2_000_000
+MAX_REDIRECTS = 5
 UA = "Mozilla/5.0 (compatible; fairfare/0.1; personal travel research)"
 MIN_USEFUL_CHARS = 300
 
@@ -27,6 +29,29 @@ class Page(BaseModel):
 
 class Fetcher(Protocol):
     def fetch(self, url: str) -> Page: ...
+
+
+class UnsafeURL(ValueError):
+    pass
+
+
+def check_public_url(url: str) -> None:
+    """Refuse non-http(s) schemes and hosts that resolve to private, loopback or link-local addresses."""
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse
+
+    u = urlparse(url)
+    if u.scheme not in ("http", "https") or not u.hostname:
+        raise UnsafeURL(f"only http(s) URLs are fetched: {url}")
+    try:
+        infos = socket.getaddrinfo(u.hostname, u.port or (443 if u.scheme == "https" else 80))
+    except socket.gaierror as exc:
+        raise UnsafeURL(f"cannot resolve {u.hostname}") from exc
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
+            raise UnsafeURL(f"{u.hostname} resolves to a non-public address")
 
 
 def _now() -> str:
@@ -53,18 +78,42 @@ class HttpFetcher:
 
     def _http(self, url: str) -> str:
         import httpx
+        from urllib.parse import urljoin
 
-        r = httpx.get(url, headers={"User-Agent": UA}, follow_redirects=True, timeout=self.timeout)
-        r.raise_for_status()
-        return html_to_text(r.text)
+        current = url
+        with httpx.Client(headers={"User-Agent": UA}, timeout=self.timeout, follow_redirects=False) as client:
+            for _ in range(MAX_REDIRECTS + 1):
+                check_public_url(current)  # every hop, so a redirect cannot reach an internal address
+                with client.stream("GET", current) as r:
+                    if r.is_redirect and r.headers.get("location"):
+                        current = urljoin(current, r.headers["location"])
+                        continue
+                    r.raise_for_status()
+                    body = b""
+                    for chunk in r.iter_bytes():
+                        body += chunk
+                        if len(body) > MAX_BYTES:
+                            break
+                    return html_to_text(body[:MAX_BYTES].decode(r.encoding or "utf-8", errors="replace"))
+        raise RuntimeError("too many redirects")
 
     def _browser(self, url: str) -> str:
         from playwright.sync_api import sync_playwright  # optional dependency
 
+        check_public_url(url)
         with sync_playwright() as p:
             b = p.chromium.launch(headless=True)
             try:
                 page = b.new_page(user_agent=UA)
+
+                def guard(route):  # the browser follows redirects and sub-requests itself: vet each one
+                    try:
+                        check_public_url(route.request.url)
+                        route.continue_()
+                    except UnsafeURL:
+                        route.abort()
+
+                page.route("**/*", guard)
                 page.goto(url, wait_until="networkidle", timeout=int(self.timeout * 1000))
                 return re.sub(r"\s+", " ", page.inner_text("body")).strip()
             finally:

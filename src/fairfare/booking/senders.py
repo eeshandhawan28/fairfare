@@ -18,7 +18,7 @@ def handoff_link(req: BookingRequest) -> str:
             raise ValueError("WhatsApp needs a phone number with country code")
         return f"https://wa.me/{d}?text={quote(req.message)}"
     if req.channel == "email":
-        if "@" not in req.contact:
-            raise ValueError("email channel needs an email address")
+        if not re.fullmatch(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", req.contact.strip()):
+            raise ValueError("email channel needs exactly one plain email address")
         return f"mailto:{req.contact}?subject={quote('Booking enquiry: ' + req.venue)}&body={quote(req.message)}"
     raise ValueError("phone bookings are not automated; call the number yourself using the drafted script")

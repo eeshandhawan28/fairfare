@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from datetime import date
 from pathlib import Path
 
@@ -53,6 +54,8 @@ def cmd_plan(args: argparse.Namespace) -> None:
 def cmd_serve(args: argparse.Namespace) -> None:
     import uvicorn
 
+    if args.host not in ("127.0.0.1", "localhost") and not os.getenv("FAIRFARE_API_KEY"):
+        raise SystemExit("Refusing to listen on a non-local address without FAIRFARE_API_KEY set.")
     if args.demo:  # offline synthetic world: try the whole UI with no network, keys or model
         from fairfare.api.app import Deps, create_app
         from fairfare.demo import FakeExtractorLLM, demo_world
@@ -103,7 +106,11 @@ def cmd_book(args: argparse.Namespace) -> None:
         for r in q.list():
             print(f"{r.id}  {r.status:10} {r.kind:10} {r.venue}")
     elif args.action == "approve":
-        q.approve(args.id, args.by)
+        req = q.get(args.id)
+        print(f"\n--- message to {req.venue} via {req.channel} ---\n{req.message}\n---")
+        if not args.yes and input("Approve exactly this text? [y/N] ").strip().lower() != "y":
+            raise SystemExit("Not approved.")
+        q.approve(args.id, args.by, req.message_hash)
         print("Approved. Run: fairfare book link", args.id)
     elif args.action == "link":
         print(q.hand_off(args.id))
@@ -151,7 +158,7 @@ def main() -> None:
     b.add_argument("--start", type=date.fromisoformat); b.add_argument("--end", type=date.fromisoformat)
     b.add_argument("--party", type=int, default=4); b.add_argument("--channel", default="whatsapp")
     b.add_argument("--contact"); b.add_argument("--language", default="en")
-    b.add_argument("--by"); b.add_argument("--text")
+    b.add_argument("--by"); b.add_argument("--text"); b.add_argument("--yes", action="store_true")
     b.set_defaults(func=cmd_book)
 
     args = p.parse_args()

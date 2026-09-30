@@ -30,7 +30,7 @@ PAGES = {
         "Important: the cable cars at Shymbulak will be closed for scheduled maintenance from October 19, 2026 "
         "to November 30, 2026. The resort reopens for the winter season on December 1."
     ),
-    "https://gov.test/visa": (
+    "https://travel.example.gov/visa": (
         "Citizens of India may stay in Kazakhstan visa-free for up to 14 days per entry. Passports must be valid "
         "for the whole stay."
     ),
@@ -86,7 +86,7 @@ CLAIMS = {
             "the cable cars at Shymbulak will be closed for scheduled maintenance from October 19, 2026 to November 30, 2026",
          "data": {"closed_from": "2026-10-19", "closed_to": "2026-11-30", "reason": "scheduled maintenance"}},
     ],
-    "https://gov.test/visa": [
+    "https://travel.example.gov/visa": [
         {"subject": "Entry", "text": "Indian citizens can stay 14 days visa-free.", "quote":
             "Citizens of India may stay in Kazakhstan visa-free for up to 14 days per entry",
          "data": {"requirement": "visa_free", "days": 14}},
@@ -120,8 +120,8 @@ SEARCH_TABLE = {
     "closure": [SearchResult(title="t", url="https://shymbulak.com/en/news", snippet="s"),
                 SearchResult(title="t", url="https://news.test/shymbulak-maintenance", snippet="s")],
     "opening hours": [SearchResult(title="t", url="https://shymbulak.com/en/news", snippet="s")],
-    "visa": [SearchResult(title="t", url="https://gov.test/visa", snippet="s")],
-    "entry rules": [SearchResult(title="t", url="https://gov.test/visa", snippet="s")],
+    "visa": [SearchResult(title="t", url="https://travel.example.gov/visa", snippet="s")],
+    "entry rules": [SearchResult(title="t", url="https://travel.example.gov/visa", snippet="s")],
     "taxi": [SearchResult(title="t", url="https://taxi.test/apps", snippet="s")],
     "rental": [SearchResult(title="t", url="https://taxi.test/apps", snippet="s")],
     "airport transfer": [SearchResult(title="t", url="https://taxi.test/apps", snippet="s")],

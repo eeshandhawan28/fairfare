@@ -62,15 +62,18 @@ def test_booking_flow_enforces_approval(client):
             "channel": "whatsapp", "contact": "+7 701 000 0000"}
     rid = client.post("/bookings", json=body).json()["id"]
     assert client.post(f"/bookings/{rid}/handoff").status_code == 409
-    assert client.post(f"/bookings/{rid}/approve", json={"by": ""}).status_code == 409
-    assert client.post(f"/bookings/{rid}/approve", json={"by": "Eeshan"}).json()["status"] == "approved"
+    h = client.get(f"/bookings").json()
+    h = next(b for b in h if b["id"] == rid)["message_hash"]
+    assert client.post(f"/bookings/{rid}/approve", json={"by": "", "message_hash": h}).status_code == 409
+    assert client.post(f"/bookings/{rid}/approve", json={"by": "Eeshan", "message_hash": "bad"}).status_code == 409
+    assert client.post(f"/bookings/{rid}/approve", json={"by": "Eeshan", "message_hash": h}).json()["status"] == "approved"
     link = client.post(f"/bookings/{rid}/handoff").json()["link"]
     assert link.startswith("https://wa.me/")
-    assert client.post("/bookings/zzz/approve", json={"by": "x"}).status_code == 404
+    assert client.post("/bookings/zzz/approve", json={"by": "x", "message_hash": "h"}).status_code == 404
     assert client.post(f"/bookings/{rid}/reply", json={"text": "Deposit needed"}).json()["reply_summary"]["asks_for_payment"]
 
 
 def test_path_traversal_ids_are_rejected(client):
     for bad in ("..%2F..%2Fetc%2Fpasswd", "x.jsonl", "a%00b"):
         assert client.get(f"/runs/{bad}").status_code in (400, 404, 422)
-    assert client.post("/bookings/..%2Fx/approve", json={"by": "x"}).status_code in (404, 405, 422)
+    assert client.post("/bookings/..%2Fx/approve", json={"by": "x", "message_hash": "h"}).status_code in (404, 405, 422)

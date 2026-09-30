@@ -62,6 +62,17 @@ traces/         local run traces (gitignored)
 docs/           plan
 ```
 
+## Usage
+```
+pip install -e ".[dev]"
+fairfare serve --demo          # offline demo API on :8000; then: cd web && npm run dev
+fairfare plan examples/kazakhstan_family.json
+fairfare audit --quote quote.txt --brief examples/kazakhstan_family.json [--live]
+fairfare book draft|list|approve|link|reply
+fairfare traces list|show|lint|review|feedback
+```
+See docs/ARCHITECTURE.md for the security model and known limits.
+
 ## Roadmap
 
 1. Spike: quote auditor on one destination (this repo now).

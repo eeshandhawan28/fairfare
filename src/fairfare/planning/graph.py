@@ -20,12 +20,12 @@ from fairfare.llm import LLM, TracedLLM
 from fairfare.models import Claim, ClosureNotice, Place, TripBrief, TripPlan
 from fairfare.pack import render_html, render_markdown, render_whatsapp
 from fairfare.planning.checker import Violation, plan_with_repair
-from fairfare.planning.scheduler import _rank
+from fairfare.planning.scheduler import _rank, eligible
 from fairfare.research import Researcher
 from fairfare.tools.fetch import Fetcher
 from fairfare.tools.search import SearchProvider
 
-MAX_VENUES_TO_VERIFY = 10
+MAX_VENUES_TO_VERIFY = 14
 
 
 class PlanState(TypedDict, total=False):
@@ -33,6 +33,7 @@ class PlanState(TypedDict, total=False):
     places: list[Place]
     avoid: list[Claim]
     notices: list[ClosureNotice]
+    checked: list[str]
     visa: list[Claim]
     transport: list[Claim]
     plan: TripPlan
@@ -63,17 +64,18 @@ def build_plan_graph(researcher: Researcher, static_notices: list[ClosureNotice]
 
     def closures_node(s: PlanState) -> PlanState:
         brief = s["brief"]
-        ranked = sorted(s["places"], key=lambda p: _rank(p, brief))
+        # only places that could actually be scheduled are worth a closure search
+        ranked = sorted((p for p in s["places"] if eligible(p, brief) is None), key=lambda p: _rank(p, brief))
         venues = [p.name for p in ranked[:MAX_VENUES_TO_VERIFY]]
         venues += [m for m in brief.must_do if m not in venues]
         live = scout_closures(researcher, venues, brief)
-        return {"notices": list(static_notices) + live}
+        return {"notices": list(static_notices) + live, "checked": venues}
 
     def entry_node(s: PlanState) -> PlanState:
         return {"visa": research_visa(researcher, s["brief"]), "transport": research_transport(researcher, s["brief"])}
 
     def schedule_node(s: PlanState) -> PlanState:
-        plan, violations, iterations = plan_with_repair(s["brief"], s["places"], s["notices"])
+        plan, violations, iterations = plan_with_repair(s["brief"], s["places"], s["notices"], checked=set(s.get("checked", [])))
         tracing.event("plan_check", iterations=iterations, violations=len(violations),
                       rules=",".join(sorted({v.rule for v in violations})))
         if not plan.places:

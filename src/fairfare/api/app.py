@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from pydantic import BaseModel
@@ -57,6 +57,7 @@ class FeedbackIn(BaseModel):
 
 class ApproveIn(BaseModel):
     by: str
+    message_hash: str
 
 
 class EditIn(BaseModel):
@@ -70,7 +71,15 @@ class ReplyIn(BaseModel):
 def create_app(deps: Optional[Deps] = None) -> FastAPI:
     d = deps or Deps()
     jobs = JobStore()
-    app = FastAPI(title="fairfare", version="0.2.0")
+    def require_key(request: Request, x_api_key: Optional[str] = Header(default=None)) -> None:
+        """If FAIRFARE_API_KEY is set, every route except /health needs it. Set it for any non-local use."""
+        expected = os.getenv("FAIRFARE_API_KEY")
+        if request.url.path == "/health":
+            return
+        if expected and x_api_key != expected:
+            raise HTTPException(401, "missing or wrong X-API-Key")
+
+    app = FastAPI(title="fairfare", version="0.2.0", dependencies=[Depends(require_key)])
     app.add_middleware(CORSMiddleware, allow_origins=os.getenv("FAIRFARE_CORS", "http://localhost:3000").split(","),
                        allow_methods=["*"], allow_headers=["*"])
 
@@ -177,7 +186,10 @@ def create_app(deps: Optional[Deps] = None) -> FastAPI:
 
     @app.post("/bookings")
     def booking_create(req: BookingRequest) -> BookingRequest:
-        return d.queue.draft(req, d.llm if os.getenv("FAIRFARE_POLISH", "0") == "1" else None)
+        try:
+            return d.queue.draft(req, d.llm if os.getenv("FAIRFARE_POLISH", "0") == "1" else None)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
 
     @app.get("/bookings")
     def booking_list() -> list[BookingRequest]:
@@ -190,12 +202,14 @@ def create_app(deps: Optional[Deps] = None) -> FastAPI:
             return d.queue.edit(rid, body.message)
         except ApprovalError as e:
             raise HTTPException(409, str(e))
+        except ValueError as e:
+            raise HTTPException(422, str(e))
 
     @app.post("/bookings/{rid}/approve")
     def booking_approve(rid: str, body: ApproveIn) -> BookingRequest:
         booking_or_404(rid)
         try:
-            return d.queue.approve(rid, body.by)
+            return d.queue.approve(rid, body.by, body.message_hash)
         except ApprovalError as e:
             raise HTTPException(409, str(e))
 

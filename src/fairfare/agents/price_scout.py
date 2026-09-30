@@ -8,7 +8,9 @@ from __future__ import annotations
 from datetime import date
 
 from fairfare.models import QuoteLine, ReferencePrice, TripBrief
-from fairfare.research import Researcher, domain, get
+from statistics import median
+
+from fairfare.research import Researcher, get, number_in_quote, registrable
 
 INSTRUCTIONS = (
     "Extract prices for '{item}' in {destination}. Only include a price if the page states the number and "
@@ -35,9 +37,13 @@ def scout_prices(researcher: Researcher, lines: list[QuoteLine], brief: TripBrie
                 except ValueError:
                     continue
                 if str(get(c.data, "currency", "")).upper() == line.currency.upper() \
-                        and get(c.data, "unit") == unit and amount > 0:
+                        and get(c.data, "unit") == unit and amount > 0 \
+                        and number_in_quote(amount, c.evidence.quote):  # the number must be in the quote
                     usable.append((amount, c))
-            if len({domain(c.evidence.url) for _, c in usable}) < 2:
+            if usable:  # drop outliers so one inflated or bogus price cannot widen the band
+                m = median(a for a, _ in usable)
+                usable = [(a, c) for a, c in usable if m / 2.5 <= a <= m * 2.5]
+            if len({registrable(c.evidence.url) for _, c in usable}) < 2:
                 continue
             amounts = [a for a, _ in usable]
             refs.append(ReferencePrice(

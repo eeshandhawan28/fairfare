@@ -10,7 +10,7 @@ from datetime import date
 
 from fairfare import tracing
 from fairfare.models import ClosureNotice, TripBrief
-from fairfare.research import Researcher, domain, get, independent_domains
+from fairfare.research import Researcher, date_in_quote, get, independent_domains, registrable
 
 INSTRUCTIONS = (
     "Extract ONLY statements that {venue} (or its lifts, cable cars, entrance, or a named part of it) "
@@ -23,6 +23,13 @@ SCHEMA = '"closed_from": "YYYY-MM-DD", "closed_to": "YYYY-MM-DD or null", "reaso
 
 def _slug(name: str) -> list[str]:
     return [w for w in re.findall(r"[a-z]{4,}", name.lower())]
+
+
+def _is_operator_domain(venue: str, url: str) -> bool:
+    """Operator site = the registrable name is one of the venue's words (or all of them joined), exactly."""
+    name = registrable(url).split(".")[0]
+    words = _slug(venue)
+    return name in words or name.replace("-", "") == "".join(words) or name in {"".join(words[:2])}
 
 
 def _parse_date(value) -> date | None:
@@ -49,13 +56,17 @@ def scout_closures(researcher: Researcher, venues: list[str], brief: TripBrief) 
                 tracing.event("closure_claim_offtopic", venue=venue, subject=c.subject)
                 continue
             start = _parse_date(get(c.data, "closed_from"))
-            if start is None:
-                tracing.event("closure_claim_undated", venue=venue, quote=c.evidence.quote)
+            if start is None or not date_in_quote(start, c.evidence.quote):
+                # the date must be readable in the quote itself, not just asserted by the model
+                tracing.event("closure_claim_ungrounded_date", venue=venue, quote=c.evidence.quote)
                 continue
-            parsed.append((c, start, _parse_date(get(c.data, "closed_to"))))
+            end = _parse_date(get(c.data, "closed_to"))
+            if end is not None and (end < start or not date_in_quote(end, c.evidence.quote)):
+                end = None  # unreadable or inconsistent end date: treat as "reopening not stated"
+            parsed.append((c, start, end))
         for c, start, end in parsed:
             peers = [p[0] for p in parsed if p[1] == start]
-            official = any(w in domain(c.evidence.url) for w in _slug(venue))
+            official = _is_operator_domain(venue, c.evidence.url)
             n = independent_domains(peers)
             confidence = "high" if official else ("medium" if n >= 2 else "low")
             notices.append(ClosureNotice(

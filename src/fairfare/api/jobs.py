@@ -9,7 +9,8 @@ from typing import Any, Callable
 class JobStore:
     """Runs long pipelines in a thread pool; clients poll /jobs/{id}."""
 
-    def __init__(self, workers: int = 2) -> None:
+    def __init__(self, workers: int = 2, keep: int = 200) -> None:
+        self.keep = keep
         self.pool = ThreadPoolExecutor(max_workers=workers)
         self.jobs: dict[str, dict[str, Any]] = {}
         self.lock = threading.Lock()
@@ -18,6 +19,8 @@ class JobStore:
         jid = uuid.uuid4().hex[:10]
         with self.lock:
             self.jobs[jid] = {"id": jid, "status": "running", "result": None, "error": None}
+            while len(self.jobs) > self.keep:  # oldest first; dicts keep insertion order
+                self.jobs.pop(next(iter(self.jobs)))
 
         def run() -> None:
             try:

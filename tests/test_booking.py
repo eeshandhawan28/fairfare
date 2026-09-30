@@ -44,8 +44,8 @@ def test_nothing_can_be_handed_off_without_approval(tmp_path):
     with pytest.raises(ApprovalError):
         q.hand_off(r.id)
     with pytest.raises(ApprovalError):
-        q.approve(r.id, "  ")
-    q.approve(r.id, "Eeshan")
+        q.approve(r.id, "  ", q.get(r.id).message_hash)
+    q.approve(r.id, "Eeshan", q.get(r.id).message_hash)
     link = q.hand_off(r.id)
     assert link.startswith("https://wa.me/77010000000?text=")
     assert q.get(r.id).status == "handed_off"
@@ -56,7 +56,7 @@ def test_nothing_can_be_handed_off_without_approval(tmp_path):
 def test_editing_voids_approval(tmp_path):
     q = BookingQueue(tmp_path)
     r = q.draft(req())
-    q.approve(r.id, "Eeshan")
+    q.approve(r.id, "Eeshan", q.get(r.id).message_hash)
     q.edit(r.id, "Changed text")
     assert q.get(r.id).status == "drafted" and not q.get(r.id).approved_by
     with pytest.raises(ApprovalError):
@@ -68,7 +68,7 @@ def test_reply_summary_flags_payment_requests(tmp_path):
     r = q.draft(req())
     with pytest.raises(ApprovalError):
         q.record_reply(r.id, "hello")  # nothing sent yet
-    q.approve(r.id, "E")
+    q.approve(r.id, "E", q.get(r.id).message_hash)
     q.hand_off(r.id)
     out = q.record_reply(r.id, "Available. Please send a deposit of 50% to confirm.")
     assert out.status == "replied" and out.reply_summary["asks_for_payment"] is True
@@ -80,3 +80,14 @@ def test_phone_channel_is_not_automated_and_email_needs_address():
     with pytest.raises(ValueError):
         handoff_link(req(channel="email", contact="nope").model_copy(update={"message": "x"}))
     assert handoff_link(req(channel="email", contact="a@b.kz").model_copy(update={"message": "hi there"})).startswith("mailto:a@b.kz")
+
+
+def test_approval_is_bound_to_the_message(tmp_path):
+    q = BookingQueue(tmp_path)
+    r = q.draft(req())
+    with pytest.raises(ApprovalError):
+        q.approve(r.id, "E", "not-the-hash")
+    q.approve(r.id, "E", q.get(r.id).message_hash)
+    q.edit(r.id, "Different text")
+    with pytest.raises(ApprovalError):
+        q.hand_off(r.id)

@@ -6,11 +6,16 @@ import re
 from fairfare.models import Claim, Evidence, Place, TripBrief
 from fairfare.research import Researcher, domain, get, independent_domains
 
-OFFICIAL_HINTS = (".gov", "gov.", "mfa.", "embassy", "consulate", "evisa", "e-visa", "visa.kz", "immigration")
+GOV_LABELS = {"gov", "govt", "gob", "gouv", "go", "mil"}
 
 
 def is_official(url: str) -> bool:
-    return any(h in domain(url) for h in OFFICIAL_HINTS)
+    """Government site: TLD is gov/mil, or a gov-style second-level label under a country TLD.
+
+    Deliberately strict. A look-alike such as embassy-evisa-fast.com is NOT official.
+    """
+    labels = domain(url).split(".")
+    return labels[-1] in {"gov", "mil"} or (len(labels) >= 2 and labels[-2] in GOV_LABELS and len(labels[-1]) <= 3)
 
 
 # ---------- places ----------
@@ -22,6 +27,28 @@ PLACES_INSTR = (
 PLACES_SCHEMA = ('"city": "string", "kind": "sight|nature|food|market|culture|adventure|wellness", '
                  '"duration_min": number, "effort": "1 easy|2 moderate|3 strenuous", '
                  '"altitude_m": number, "min_age": number')
+
+
+def _altitude(v):
+    """Metres from '2,260 m' or '3.2 km'."""
+    if v is None:
+        return None
+    n = _int(v)
+    if n is None:
+        return None
+    return int(float(re.search(r"\d[\d,]*(?:\.\d+)?", str(v)).group().replace(",", "")) * 1000) \
+        if re.search(r"km", str(v), re.I) else n
+
+
+def _minutes(v, default=90):
+    """Minutes from '90', '2 hours', '1.5h'."""
+    if v is None:
+        return default
+    m = re.search(r"\d+(?:\.\d+)?", str(v))
+    if not m:
+        return default
+    x = float(m.group())
+    return int(x * 60) if re.search(r"h(our|r)?s?\b", str(v), re.I) and not re.search(r"min", str(v), re.I) else int(x)
 
 
 def _int(v, default=None):
@@ -39,8 +66,8 @@ def claim_to_place(c: Claim, hidden_gem: bool = False) -> Place:
     d = c.data
     return Place(
         name=c.subject.strip(), city=str(get(d, "city", "")), kind=str(get(d, "kind", "sight")),
-        duration_min=max(30, min(_int(get(d, "duration_min"), 90), 480)),
-        effort=max(1, min(_int(get(d, "effort"), 1), 3)), altitude_m=_int(get(d, "altitude_m")),
+        duration_min=max(30, min(_minutes(get(d, "duration_min")), 480)),
+        effort=max(1, min(_int(get(d, "effort"), 1), 3)), altitude_m=_altitude(get(d, "altitude_m")),
         min_age=_int(get(d, "min_age")), hidden_gem=hidden_gem, evidence=[c.evidence], notes=c.text)
 
 

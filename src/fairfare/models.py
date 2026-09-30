@@ -3,12 +3,12 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class Traveller(BaseModel):
-    name: str
-    age: int
+    name: str = Field(max_length=60)
+    age: int = Field(ge=0, le=110)
     mobility: Literal["full", "limited"] = "full"
 
 
@@ -24,6 +24,16 @@ class TripBrief(BaseModel):
     interests: list[str] = Field(default_factory=list)
     must_do: list[str] = Field(default_factory=list)
     avoid: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _sane(self) -> "TripBrief":
+        if self.end < self.start:
+            raise ValueError("end date is before start date")
+        if (self.end - self.start).days > 30:
+            raise ValueError("trips longer than 30 nights are not supported")
+        if len(self.travellers) > 12:
+            raise ValueError("at most 12 travellers")
+        return self
 
     @property
     def nights(self) -> int:
@@ -103,6 +113,12 @@ class ClosureNotice(BaseModel):
     reason: str = ""
     source: str
     confidence: Literal["low", "medium", "high"] = "medium"
+
+    @model_validator(mode="after")
+    def _ordered(self) -> "ClosureNotice":
+        if self.closed_to is not None and self.closed_to < self.closed_from:
+            raise ValueError("closure ends before it starts")
+        return self
 
     def covers(self, day: date) -> bool:
         return self.closed_from <= day and (self.closed_to is None or day <= self.closed_to)

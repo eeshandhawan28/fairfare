@@ -21,7 +21,8 @@ def _claims_md(claims: list[Claim], empty: str) -> list[str]:
         extra = ""
         if c.kind == "visa":
             extra = " (official source)" if c.data.get("official") else " (unofficial source, verify)"
-        contact = f" Contact: {c.data['contact']}." if c.data.get("contact") else ""
+        contact = (f" Contact: {c.data['contact']} (from {domain(c.evidence.url)}, not independently verified)."
+                   if c.data.get("contact") else "")
         out.append(f"- {c.text}{extra}{contact} [{domain(c.evidence.url)}]({c.evidence.url})")
     return out
 
@@ -83,10 +84,17 @@ def render_html(plan: TripPlan, audit_report: Optional[str] = None) -> str:
             + (f" <small>{e(blk.notes)}</small>" if blk.notes else "") + "</li>" for blk in d.blocks)
         pb = f"<p class='b'>{e(d.plan_b)}</p>" if d.plan_b else ""
         parts.append(f"<section><h2>Day {i}: {e(d.day.strftime('%A %d %B'))}</h2><ul>{rows}</ul>{pb}</section>")
-    for title, claims in (("Entry and visa", plan.visa), ("Getting around", plan.transport)):
+    for title, claims in (("Entry and visa", plan.visa), ("Getting around", plan.transport),
+                          ("Reports to be careful about", plan.avoid)):
         if claims:
-            parts.append(f"<section><h2>{title}</h2><ul>" + "".join(
-                f"<li>{e(c.text)} <small>{e(domain(c.evidence.url))}</small></li>" for c in claims) + "</ul></section>")
+            def item(c: Claim) -> str:
+                tag = ""
+                if c.kind == "visa":
+                    tag = " (official source)" if c.data.get("official") else " (unofficial source, verify)"
+                contact = f" Contact: {c.data['contact']} (from {domain(c.evidence.url)}, not independently verified)." \
+                    if c.data.get("contact") else ""
+                return f"<li>{e(c.text)}{e(tag)}{e(contact)} <small>{e(domain(c.evidence.url))}</small></li>"
+            parts.append(f"<section><h2>{title}</h2><ul>" + "".join(item(c) for c in claims) + "</ul></section>")
     if audit_report:
         parts.append(f"<section><h2>Quote audit</h2><pre>{e(audit_report)}</pre></section>")
     css = ("body{font-family:system-ui,sans-serif;font-size:20px;line-height:1.5;max-width:820px;margin:24px auto;"

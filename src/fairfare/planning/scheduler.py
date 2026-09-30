@@ -56,8 +56,9 @@ def place_all(picks: list[Place], windows: list[tuple[int, int]]) -> tuple[list[
 
 class Planner:
     def __init__(self, brief: TripBrief, places: list[Place], notices: list[ClosureNotice],
-                 exclude: set[str] | None = None) -> None:
+                 exclude: set[str] | None = None, checked: set[str] | None = None) -> None:
         self.brief, self.notices = brief, notices
+        self.checked = {c.lower() for c in checked} if checked is not None else None
         self.exclude = {e.lower() for e in (exclude or set())}
         self.warnings: list[str] = []
         self.candidates: list[Place] = []
@@ -103,6 +104,11 @@ class Planner:
             self.warnings.append(
                 f"{name} is reported closed from {n.closed_from.isoformat()} ({end}); kept off those days "
                 f"[{n.confidence} confidence]. Confirm with the operator.")
+        if self.checked is not None:
+            scheduled = {b.place for d in out for b in d.blocks if b.kind == "activity" and b.place}
+            for name in sorted(scheduled):
+                if name.lower() not in self.checked:
+                    self.warnings.append(f"{name}: closures and season were not checked online. Confirm it is open on your dates.")
         empty = [d.day.strftime("%d %b") for d in out if d.role == "full" and not any(
             b.kind == "activity" for b in d.blocks)]
         if empty:
@@ -193,12 +199,15 @@ class Planner:
 
     def _emit(self, blocks: list[Block], picks: list[Place], windows: list[tuple[int, int]]) -> None:
         placed, ok = place_all(picks, windows)
-        assert ok, "picks were verified to fit; layout must agree"
+        if not ok:
+            raise RuntimeError("scheduler invariant broken: picks do not fit their windows")
         for i, (p, cursor, begin, end) in enumerate(placed):
             if i > 0:
                 blocks.append(Block(start=R.hm(cursor), end=R.hm(begin), kind="transfer", title=f"Transfer to {p.name}"))
             note = f"{p.city}. " if p.city else ""
             if (p.altitude_m or 0) >= R.ALTITUDE_M:
                 note += f"Altitude about {p.altitude_m} m: go slowly, carry water. "
+            elif p.altitude_m is None and p.kind in ("nature", "adventure") and R.altitude_sensitive(self.brief):
+                note += "Altitude not verified: check before going. "
             blocks.append(Block(start=R.hm(begin), end=R.hm(end), kind="activity", title=p.name, place=p.name,
                                 notes=(note + p.notes).strip(), sources=p.sources))

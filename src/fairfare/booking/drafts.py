@@ -14,7 +14,12 @@ KIND_EN = {"hotel": "a room", "tour": "a tour", "ticket": "tickets", "restaurant
            "transport": "a transfer"}
 KIND_RU = {"hotel": "номер", "tour": "экскурсию", "ticket": "билеты", "restaurant": "столик",
            "transport": "трансфер"}
-SENSITIVE = re.compile(r"passport|паспорт|card number|cvv|iban|\b\d{12,19}\b|otp", re.I)
+SENSITIVE = re.compile(r"passport|паспорт|card number|cvv|iban|otp|aadhaar|\b(?:\d[ -]?){12,19}\b", re.I)
+
+
+def assert_no_sensitive(text: str) -> None:
+    if SENSITIVE.search(text):
+        raise ValueError("message looks like it contains passport, ID or payment details; remove them")
 
 
 def template(req: BookingRequest) -> str:
@@ -34,18 +39,18 @@ def template(req: BookingRequest) -> str:
 
 
 def required_facts(req: BookingRequest) -> list[str]:
-    facts = [str(req.party_size)]
-    facts.append(req.start.strftime("%d.%m.%Y") if req.language == "ru" else req.start.isoformat())
-    return facts
+    return [rf"(?<!\d){req.party_size}(?!\d)",
+            re.escape(req.start.strftime("%d.%m.%Y") if req.language == "ru" else req.start.isoformat())]
 
 
 def draft_message(req: BookingRequest, llm: Optional[LLM] = None) -> str:
+    assert_no_sensitive(req.notes)  # notes flow into the template, so vet them before anything else
     base = template(req)
     if llm is None:
         return base
     system = ("Rewrite this booking enquiry to sound natural and polite in the same language. Keep every date, "
               "number and question. Do not add anything else. Return only the message.")
     polished = llm.complete("booking_writer", system, base).strip()
-    ok = all(f in polished for f in required_facts(req)) and not SENSITIVE.search(polished) and len(polished) < 900
+    ok = all(re.search(f, polished) for f in required_facts(req)) and not SENSITIVE.search(polished) and len(polished) < 900
     tracing.event("booking_polish", accepted=ok)
     return polished if ok else base

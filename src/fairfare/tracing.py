@@ -67,7 +67,7 @@ class Tracer:
             })
 
     def feedback(self, rating: str, note: str = "") -> None:
-        self._write({"type": "feedback", "rating": rating, "note": note})
+        self._write({"type": "feedback", "rating": rating, "note": clip(note, 500)})
 
     def end(self, **summary: Any) -> None:
         self._write({"type": "run_end", **{k: clip(v) for k, v in summary.items()}})
@@ -118,7 +118,13 @@ def load(run: str, directory: Optional[Path] = None) -> list[dict[str, Any]]:
         if not matches:
             raise FileNotFoundError(f"no trace for '{run}' in {d}")
         path = matches[-1]
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    events = []
+    for line in path.read_text().splitlines():
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue  # a torn write must not make the whole run unreadable
+    return events
 
 
 def list_runs(directory: Optional[Path] = None) -> list[Path]:

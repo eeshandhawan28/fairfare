@@ -18,7 +18,7 @@ class Violation:
 
 
 # rules whose fix is "drop this place and re-plan"
-EXCLUDING = {"closed_place", "unverified_place", "min_age", "altitude_early"}
+EXCLUDING = {"closed_place", "unverified_place", "min_age", "altitude_early", "avoided_place"}
 
 
 def check_plan(plan: TripPlan, places: list[Place], notices: list[ClosureNotice]) -> list[Violation]:
@@ -39,6 +39,8 @@ def check_plan(plan: TripPlan, places: list[Place], notices: list[ClosureNotice]
                 out.append(Violation("unverified_place", day, f"{b.title} has no verified source.", b.place))
                 continue
             load += R.place_cost(p)
+            if any(a.lower() in p.name.lower() or a.lower() == p.kind.lower() for a in brief.avoid):
+                out.append(Violation("avoided_place", day, f"{p.name} is on the avoid list.", p.name))
             if R.closed_on(p, d.day, notices):
                 out.append(Violation("closed_place", day, f"{p.name} is reported closed on {day}.", p.name))
             if p.min_age is not None and youngest < p.min_age:
@@ -47,7 +49,7 @@ def check_plan(plan: TripPlan, places: list[Place], notices: list[ClosureNotice]
                 alt_days.append(i)
                 if not R.altitude_allowed(i, n_days):
                     out.append(Violation("altitude_early", day, f"{p.name} is at altitude too early in the trip.", p.name))
-        role_cap = d.cap
+        role_cap = R.group_cap(brief) if d.role == "full" else max(1, round(R.group_cap(brief) * R.ARRIVAL_DEPARTURE_FACTOR))
         if load > role_cap:
             out.append(Violation("over_cap", day, f"Day load {load} exceeds cap {role_cap}."))
         full_day_outing = any(R.is_full_day(by_name[b.place]) for b in acts if b.place in by_name)
@@ -84,11 +86,11 @@ def check_plan(plan: TripPlan, places: list[Place], notices: list[ClosureNotice]
 
 
 def plan_with_repair(brief: TripBrief, places: list[Place], notices: list[ClosureNotice],
-                     max_iter: int = 3) -> tuple[TripPlan, list[Violation], int]:
+                     max_iter: int = 5, checked: set[str] | None = None) -> tuple[TripPlan, list[Violation], int]:
     """Plan, check, drop offending places, re-plan. Returns (plan, remaining violations, iterations)."""
     exclude: set[str] = set()
     for it in range(1, max_iter + 1):
-        planner = Planner(brief, places, notices, exclude)
+        planner = Planner(brief, places, notices, exclude, checked)
         plan = planner.plan()
         violations = check_plan(plan, places, notices)
         offenders = {v.place for v in violations if v.rule in EXCLUDING and v.place}
