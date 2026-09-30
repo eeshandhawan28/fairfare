@@ -6,17 +6,23 @@ Every node is traced as a span.
 """
 from __future__ import annotations
 
+import functools
 from typing import Any, Callable, Optional, TypedDict
 
 from langgraph.graph import END, StateGraph
 
 from fairfare import tracing
 from fairfare.agents.closures import check_closures
+from fairfare.agents.closure_scout import scout_closures
 from fairfare.agents.price_check import check_prices
+from fairfare.agents.price_scout import scout_prices
 from fairfare.agents.quote_parser import parse_quote
 from fairfare.llm import LLM, TracedLLM
 from fairfare.models import ClosureNotice, Finding, QuoteLine, ReferencePrice, TripBrief
 from fairfare.report import render_report
+from fairfare.research import Researcher
+from fairfare.tools.fetch import Fetcher
+from fairfare.tools.search import SearchProvider
 
 
 class AuditState(TypedDict, total=False):
@@ -28,7 +34,8 @@ class AuditState(TypedDict, total=False):
 
 
 def _traced(name: str, fn: Callable[[AuditState], AuditState]) -> Callable[[AuditState], AuditState]:
-    def wrapper(state: AuditState) -> AuditState:
+    @functools.wraps(fn)  # keep fn's annotations: LangGraph infers each node's input schema from them
+    def wrapper(state):
         with tracing.span(name, kind="node") as rec:
             result = fn(state)
             rec["output"] = {k: (len(v) if isinstance(v, list) else "set") for k, v in result.items()}
@@ -36,18 +43,28 @@ def _traced(name: str, fn: Callable[[AuditState], AuditState]) -> Callable[[Audi
     return wrapper
 
 
-def build_graph(llm: LLM, refs: list[ReferencePrice], notices: list[ClosureNotice]):
+def build_graph(llm: LLM, refs: list[ReferencePrice], notices: list[ClosureNotice],
+                researcher: Optional[Researcher] = None):
     def parse_node(state: AuditState) -> AuditState:
         return {"lines": parse_quote(llm, state["quote_text"])}
 
     def price_node(state: AuditState) -> AuditState:
-        found = check_prices(state["lines"], refs)
+        all_refs = list(refs)
+        if researcher:  # live mode: build extra bands from the web; static bands stay first
+            all_refs += scout_prices(researcher, state["lines"], state["brief"])
+        found = check_prices(state["lines"], all_refs, max(1, len(state["brief"].travellers)),
+                             state["brief"].nights)
         unreferenced = sum(1 for f in found if "No independent price reference" in f.message)
         tracing.event("price_coverage", lines=len(state["lines"]), unreferenced=unreferenced)
         return {"findings": state.get("findings", []) + found}
 
     def closure_node(state: AuditState) -> AuditState:
-        found = check_closures(state["lines"], state["brief"], notices)
+        all_notices = list(notices)
+        if researcher:
+            venues = [l.item for l in state["lines"] if l.category in ("activity", "other")]
+            all_notices += scout_closures(researcher, venues, state["brief"])
+        tracing.event("closure_sources", static=len(notices), total=len(all_notices))
+        found = check_closures(state["lines"], state["brief"], all_notices)
         return {"findings": state.get("findings", []) + found}
 
     def report_node(state: AuditState) -> AuditState:
@@ -73,13 +90,17 @@ def run_audit(
     refs: list[ReferencePrice],
     notices: list[ClosureNotice],
     tracer: Optional[tracing.Tracer] = None,
+    search: Optional[SearchProvider] = None,
+    fetcher: Optional[Fetcher] = None,
     **meta: Any,
 ) -> dict[str, Any]:
     """Run one traced audit. Returns the final graph state plus the run id."""
     tracer = tracer or tracing.Tracer(destination=brief.destination, start=str(brief.start),
                                       end=str(brief.end), **meta)
     with tracing.use(tracer):
-        graph = build_graph(TracedLLM(llm), refs, notices)
+        traced = TracedLLM(llm)
+        researcher = Researcher(traced, search, fetcher) if search and fetcher else None
+        graph = build_graph(traced, refs, notices, researcher)
         try:
             result = graph.invoke({"quote_text": quote_text, "brief": brief})
         except Exception as exc:

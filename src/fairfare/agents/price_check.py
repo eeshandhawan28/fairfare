@@ -14,7 +14,8 @@ def _match(line: QuoteLine, refs: list[ReferencePrice]) -> ReferencePrice | None
     return None
 
 
-def check_prices(lines: list[QuoteLine], refs: list[ReferencePrice]) -> list[Finding]:
+def check_prices(lines: list[QuoteLine], refs: list[ReferencePrice], travellers: int = 1,
+                 nights: int = 1) -> list[Finding]:
     findings: list[Finding] = []
     for line in lines:
         if line.amount is None:
@@ -48,9 +49,11 @@ def check_prices(lines: list[QuoteLine], refs: list[ReferencePrice]) -> list[Fin
                 )
             )
             continue
-        ceiling = ref.high * (1 + TOLERANCE)
+        scale = travellers if ref.unit == "per_person" else 1
+        low, high = ref.low * scale, ref.high * scale
+        ceiling = high * (1 + TOLERANCE)
         if line.amount > ceiling:
-            over = (line.amount - ref.high) / ref.high * 100
+            over = (line.amount - high) / high * 100
             findings.append(
                 Finding(
                     severity="warn",
@@ -58,7 +61,8 @@ def check_prices(lines: list[QuoteLine], refs: list[ReferencePrice]) -> list[Fin
                     line=line.item,
                     message=(
                         f"Quoted {line.amount:,.0f} {line.currency}; independent range is "
-                        f"{ref.low:,.0f} to {ref.high:,.0f} ({over:.0f}% above the top of the range). "
+                        f"{low:,.0f} to {high:,.0f} ({over:.0f}% above the top of the range"
+                        f"{', scaled to ' + str(travellers) + ' travellers' if scale > 1 else ''}). "
                         f"Reference dated {ref.as_of}."
                     ),
                     source=ref.source,

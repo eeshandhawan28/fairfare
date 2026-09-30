@@ -1,0 +1,36 @@
+from __future__ import annotations
+
+import threading
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Callable
+
+
+class JobStore:
+    """Runs long pipelines in a thread pool; clients poll /jobs/{id}."""
+
+    def __init__(self, workers: int = 2) -> None:
+        self.pool = ThreadPoolExecutor(max_workers=workers)
+        self.jobs: dict[str, dict[str, Any]] = {}
+        self.lock = threading.Lock()
+
+    def submit(self, fn: Callable[[], dict[str, Any]]) -> str:
+        jid = uuid.uuid4().hex[:10]
+        with self.lock:
+            self.jobs[jid] = {"id": jid, "status": "running", "result": None, "error": None}
+
+        def run() -> None:
+            try:
+                result = fn()
+                with self.lock:
+                    self.jobs[jid].update(status="done", result=result)
+            except Exception as exc:  # surfaced to the client, full detail is in the trace
+                with self.lock:
+                    self.jobs[jid].update(status="error", error=f"{type(exc).__name__}: {exc}")
+
+        self.pool.submit(run)
+        return jid
+
+    def get(self, jid: str) -> dict[str, Any] | None:
+        with self.lock:
+            return dict(self.jobs[jid]) if jid in self.jobs else None

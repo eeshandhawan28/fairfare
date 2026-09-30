@@ -61,10 +61,15 @@ class LiteLLMClient:
 class TracedLLM:
     """Wraps any LLM so every call becomes a span (model, prompt, output, latency, tokens)."""
 
-    def __init__(self, inner: LLM) -> None:
+    def __init__(self, inner: LLM, max_calls: int | None = None) -> None:
         self.inner = inner
+        self.calls = 0
+        self.max_calls = max_calls if max_calls is not None else int(os.getenv("FAIRFARE_MAX_LLM_CALLS", "300"))
 
     def complete(self, agent: str, system: str, user: str) -> str:
+        self.calls += 1
+        if self.calls > self.max_calls:
+            raise RuntimeError(f"LLM call budget exceeded ({self.max_calls}); raise FAIRFARE_MAX_LLM_CALLS")
         model = self.inner.model_for(agent) if hasattr(self.inner, "model_for") else "unknown"
         with tracing.span(f"llm:{agent}", kind="llm", agent=agent, model=model,
                           system=system, prompt=user) as rec:
