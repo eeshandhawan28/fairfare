@@ -1,0 +1,20 @@
+[
+  {
+    "category": "activity",
+    "keywords": ["city tour", "almaty city"],
+    "low": 2000,
+    "high": 4000,
+    "currency": "INR",
+    "source": "SYNTHETIC EXAMPLE - replace with a live price source",
+    "as_of": "2026-09-30"
+  },
+  {
+    "category": "transfer",
+    "keywords": ["airport transfer"],
+    "low": 1000,
+    "high": 2000,
+    "currency": "INR",
+    "source": "SYNTHETIC EXAMPLE - replace with a live price source",
+    "as_of": "2026-09-30"
+  }
+]

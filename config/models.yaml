@@ -1,0 +1,13 @@
+# Model routing per agent. Format is LiteLLM's "provider/model".
+# Development and tests run free on Ollama. Switch a single agent by editing one line.
+#
+# Examples of other providers (uncomment and set the key in .env):
+#   openrouter/deepseek/deepseek-chat
+#   openrouter/moonshotai/kimi-k2
+#   deepseek/deepseek-chat
+# Check current model names and prices before committing to one.
+default: ollama/qwen2.5:7b
+
+agents:
+  quote_parser: ollama/qwen2.5:7b
+  # planner: openrouter/<stronger-model>   # later: planning and checking

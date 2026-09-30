@@ -1,0 +1,11 @@
+{
+  "name": "shymbulak_closure",
+  "description": "Agent sold a Shymbulak day for dates after the cable cars close for maintenance.",
+  "start": "2026-10-19",
+  "end": "2026-10-24",
+  "quote_file": "evals/cases/shymbulak_quote.txt",
+  "expect": {
+    "closure_flagged_for": "shymbulak",
+    "price_flagged_for": "airport transfer"
+  }
+}
