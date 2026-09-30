@@ -13,6 +13,8 @@ from typing import Any, Protocol
 
 import yaml
 
+from fairfare import tracing
+
 DEFAULT_MODEL = "ollama/qwen2.5:7b"
 DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "config" / "models.yaml"
 
@@ -25,6 +27,7 @@ class LiteLLMClient:
     def __init__(self, config_path: Path | None = None) -> None:
         path = config_path or DEFAULT_CONFIG
         self.config: dict[str, Any] = {}
+        self.last_usage: dict[str, int] = {}
         if path.exists():
             self.config = yaml.safe_load(path.read_text()) or {}
 
@@ -47,7 +50,30 @@ class LiteLLMClient:
             temperature=0,
             api_base=os.getenv("OLLAMA_API_BASE") or None,
         )
+        usage = getattr(response, "usage", None)
+        self.last_usage = {
+            "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+            "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
+        }
         return response.choices[0].message.content or ""
+
+
+class TracedLLM:
+    """Wraps any LLM so every call becomes a span (model, prompt, output, latency, tokens)."""
+
+    def __init__(self, inner: LLM) -> None:
+        self.inner = inner
+
+    def complete(self, agent: str, system: str, user: str) -> str:
+        model = self.inner.model_for(agent) if hasattr(self.inner, "model_for") else "unknown"
+        with tracing.span(f"llm:{agent}", kind="llm", agent=agent, model=model,
+                          system=system, prompt=user) as rec:
+            out = self.inner.complete(agent, system, user)
+            rec["output"] = out
+            usage = getattr(self.inner, "last_usage", None)
+            if usage:
+                rec.update(usage)
+            return out
 
 
 def extract_json(text: str) -> Any:

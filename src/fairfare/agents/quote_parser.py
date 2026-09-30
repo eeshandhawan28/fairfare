@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pydantic import ValidationError
 
+from fairfare import tracing
 from fairfare.llm import LLM, extract_json
 from fairfare.models import QuoteLine
 
@@ -15,13 +16,19 @@ Do not invent lines. If an amount is missing, skip the line."""
 
 def parse_quote(llm: LLM, quote_text: str) -> list[QuoteLine]:
     raw = llm.complete("quote_parser", SYSTEM, quote_text)
-    data = extract_json(raw)
+    try:
+        data = extract_json(raw)
+    except ValueError:
+        tracing.event("parse_failed", reason="no JSON in model output", output=raw)
+        return []
     if isinstance(data, dict):
         data = data.get("lines", [])
     lines: list[QuoteLine] = []
+    dropped = 0
     for entry in data:
         try:
             lines.append(QuoteLine(**entry))
         except (ValidationError, TypeError):
-            continue  # drop malformed rows rather than guess
+            dropped += 1  # drop malformed rows rather than guess
+    tracing.event("parse_result", parsed=len(lines), dropped=dropped)
     return lines

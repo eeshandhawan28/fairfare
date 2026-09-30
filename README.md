@@ -32,6 +32,20 @@ fairfare audit evals/cases/shymbulak_quote.txt --start 2026-10-19 --end 2026-10-
 python evals/run.py                      # scores the configured model on known cases
 ```
 
+## Tracing and improvement loop
+
+Every run writes `traces/<run_id>.jsonl` (gitignored): each LLM call (model, prompt, output, latency, tokens) and each graph node is a span, plus events like parse results and price coverage.
+
+```bash
+fairfare traces list
+fairfare traces show <run>        # span tree with timings and errors
+fairfare traces lint <run>        # deterministic checks, free
+fairfare traces review <run>      # lint + a small cheap model reads the trace
+fairfare traces feedback <run> --rating bad --note "missed the closure"
+```
+
+Loop: run, review, turn every `bad` run into a case in `evals/cases/`, change a prompt or model, re-run `python evals/run.py`. Model reviewer output is labelled `model` and is advice, not truth. Traces are plain JSON, so exporting to Langfuse or OpenTelemetry later needs no changes to the agents.
+
 ## Models
 
 All agents call one layer (LiteLLM). Edit `config/models.yaml` to route any agent to Ollama, DeepSeek, Moonshot or any OpenRouter model. Use `evals/` to compare models per agent before switching. Small local models are weaker at structured output, so expect to check parse quality.
@@ -44,6 +58,7 @@ config/         model routing
 data/           reference prices and closure notices
 evals/          known-problem cases and runner
 tests/          offline tests with a fake LLM
+traces/         local run traces (gitignored)
 docs/           plan
 ```
 

@@ -2,17 +2,19 @@
 
 Only the parse step calls an LLM. Price and closure checks are deterministic so a
 finding is always traceable to a dated source, never to a model's recollection.
+Every node is traced as a span.
 """
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Any, Callable, Optional, TypedDict
 
 from langgraph.graph import END, StateGraph
 
+from fairfare import tracing
 from fairfare.agents.closures import check_closures
 from fairfare.agents.price_check import check_prices
 from fairfare.agents.quote_parser import parse_quote
-from fairfare.llm import LLM
+from fairfare.llm import LLM, TracedLLM
 from fairfare.models import ClosureNotice, Finding, QuoteLine, ReferencePrice, TripBrief
 from fairfare.report import render_report
 
@@ -25,12 +27,23 @@ class AuditState(TypedDict, total=False):
     report: str
 
 
+def _traced(name: str, fn: Callable[[AuditState], AuditState]) -> Callable[[AuditState], AuditState]:
+    def wrapper(state: AuditState) -> AuditState:
+        with tracing.span(name, kind="node") as rec:
+            result = fn(state)
+            rec["output"] = {k: (len(v) if isinstance(v, list) else "set") for k, v in result.items()}
+            return result
+    return wrapper
+
+
 def build_graph(llm: LLM, refs: list[ReferencePrice], notices: list[ClosureNotice]):
     def parse_node(state: AuditState) -> AuditState:
         return {"lines": parse_quote(llm, state["quote_text"])}
 
     def price_node(state: AuditState) -> AuditState:
         found = check_prices(state["lines"], refs)
+        unreferenced = sum(1 for f in found if "No independent price reference" in f.message)
+        tracing.event("price_coverage", lines=len(state["lines"]), unreferenced=unreferenced)
         return {"findings": state.get("findings", []) + found}
 
     def closure_node(state: AuditState) -> AuditState:
@@ -41,13 +54,40 @@ def build_graph(llm: LLM, refs: list[ReferencePrice], notices: list[ClosureNotic
         return {"report": render_report(state["brief"], state["lines"], state["findings"])}
 
     graph = StateGraph(AuditState)
-    graph.add_node("parse", parse_node)
-    graph.add_node("prices", price_node)
-    graph.add_node("closures", closure_node)
-    graph.add_node("report", report_node)
+    graph.add_node("parse", _traced("parse", parse_node))
+    graph.add_node("prices", _traced("prices", price_node))
+    graph.add_node("closures", _traced("closures", closure_node))
+    graph.add_node("report", _traced("report", report_node))
     graph.set_entry_point("parse")
     graph.add_edge("parse", "prices")
     graph.add_edge("prices", "closures")
     graph.add_edge("closures", "report")
     graph.add_edge("report", END)
     return graph.compile()
+
+
+def run_audit(
+    llm: LLM,
+    brief: TripBrief,
+    quote_text: str,
+    refs: list[ReferencePrice],
+    notices: list[ClosureNotice],
+    tracer: Optional[tracing.Tracer] = None,
+    **meta: Any,
+) -> dict[str, Any]:
+    """Run one traced audit. Returns the final graph state plus the run id."""
+    tracer = tracer or tracing.Tracer(destination=brief.destination, start=str(brief.start),
+                                      end=str(brief.end), **meta)
+    with tracing.use(tracer):
+        graph = build_graph(TracedLLM(llm), refs, notices)
+        try:
+            result = graph.invoke({"quote_text": quote_text, "brief": brief})
+        except Exception as exc:
+            tracer.end(status="error", error=f"{type(exc).__name__}: {exc}")
+            raise
+        findings = result.get("findings", [])
+        tracer.end(status="ok", lines=len(result.get("lines", [])),
+                   findings=len(findings),
+                   high=sum(1 for f in findings if f.severity == "high"))
+    result["run_id"] = tracer.run_id
+    return result

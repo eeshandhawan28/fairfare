@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# fairfare run traces (local, may contain quotes)
+traces/
+.env

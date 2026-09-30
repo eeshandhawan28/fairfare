@@ -11,7 +11,7 @@ from datetime import date
 from pathlib import Path
 
 from fairfare.data import load_closures, load_reference_prices
-from fairfare.graph import build_graph
+from fairfare.graph import run_audit
 from fairfare.llm import LiteLLMClient
 from fairfare.models import TripBrief
 
@@ -25,8 +25,9 @@ def run_case(path: Path) -> bool:
         start=date.fromisoformat(case["start"]),
         end=date.fromisoformat(case["end"]),
     )
-    graph = build_graph(LiteLLMClient(), load_reference_prices(), load_closures())
-    result = graph.invoke({"quote_text": (ROOT / case["quote_file"]).read_text(), "brief": brief})
+    result = run_audit(LiteLLMClient(), brief, (ROOT / case["quote_file"]).read_text(),
+                       load_reference_prices(), load_closures(), eval_case=case["name"])
+    print(f"  trace: {result['run_id']}")
     findings = result["findings"]
     ok = True
     want_closure = case["expect"].get("closure_flagged_for")

@@ -11,3 +11,4 @@ default: ollama/qwen2.5:7b
 agents:
   quote_parser: ollama/qwen2.5:7b
   # planner: openrouter/<stronger-model>   # later: planning and checking
+  trace_reviewer: ollama/qwen2.5:7b   # small and cheap on purpose; swap freely
