@@ -5,6 +5,9 @@ from datetime import date
 
 from fairfare.models import Block, ClosureNotice, DayPlan, Place, TripBrief, TripPlan
 from fairfare.planning import rules as R
+from fairfare.planning.places import MAX_ONE_WAY_MIN, annotate_travel, is_food_item
+
+STEEP_WORDS = ("steep", "stairs", "steps", "uphill", "climb", "strenuous", "demanding", "scramble")
 
 
 def _rank(p: Place, brief: TripBrief) -> tuple:
@@ -23,15 +26,37 @@ def eligible(p: Place, brief: TripBrief) -> str | None:
     youngest = min((t.age for t in brief.travellers), default=99)
     if p.min_age is not None and youngest < p.min_age:
         return f"minimum age {p.min_age}"
+    if is_food_item(p):
+        return "food item (listed under What to eat)"
+    if p.travel_min is not None and p.travel_min > MAX_ONE_WAY_MIN:
+        return f"too far for a day trip ({p.travel_min // 60} h each way)"
+    if p.travel_min is not None and R.excursion_hours(p) > 11.5:
+        return f"day trip would take {R.excursion_hours(p):.0f} h door to door"
+    limited = any(t.mobility == "limited" for t in brief.travellers)
+    avoids_steep = any(k in a.lower() for a in brief.avoid for k in ("steep", "stairs", "hike", "hiking", "climb", "walking"))
+    if limited or avoids_steep:
+        text = " ".join(e.quote for e in p.evidence).lower() + " " + p.notes.lower()
+        if any(w in text for w in STEEP_WORDS):
+            return "steep, stairs or hard walking (mobility or avoid list)"
+        if p.effort >= 3:
+            return "strenuous (mobility or avoid list)"
     return None
 
 
-def windows_for(role: str, brief: TripBrief) -> list[tuple[int, int]]:
+def windows_for(role: str, brief: TripBrief, early: bool = False) -> list[tuple[int, int]]:
     if role == "arrival":
         return [(16 * 60, R.DAY_END)]
     if role == "departure":
         return [(R.DAY_START, 11 * 60 + 30)]
-    return [(R.DAY_START, R.LUNCH[0]), (R.rest_window(brief)[1], R.DAY_END)]
+    wins = [(R.DAY_START, R.LUNCH[0]), (R.rest_window(brief)[1], R.DAY_END)]
+    return [(5 * 60 + 30, 9 * 60 + 30)] + wins if early else wins
+
+
+def _hhmm(v: str) -> int | None:
+    try:
+        return R.mins(v) if v else None
+    except ValueError:
+        return None
 
 
 def place_all(picks: list[Place], windows: list[tuple[int, int]]) -> tuple[list[tuple[Place, int, int, int]], bool]:
@@ -45,7 +70,17 @@ def place_all(picks: list[Place], windows: list[tuple[int, int]]) -> tuple[list[
             wstart, wend = windows[wi]
             cursor = max(cursor, wstart)
             t = 0 if first else R.transfer_minutes(prev_city, p.city)
-            begin, end = cursor + t, cursor + t + p.duration_min
+            begin = cursor + t
+            if p.best_time == "sunrise" and wstart >= 9 * 60 + 30:
+                wi += 1  # sunrise-only: never after the early window
+                continue
+            opens, closes = _hhmm(p.opens), _hhmm(p.closes)
+            if opens is not None and begin < opens:
+                begin = opens
+            end = begin + p.duration_min
+            if closes is not None and end > closes:
+                wi += 1
+                continue
             if end <= wend:
                 placed.append((p, cursor, begin, end))
                 cursor, prev_city, first = end, p.city, False
@@ -57,6 +92,7 @@ def place_all(picks: list[Place], windows: list[tuple[int, int]]) -> tuple[list[
 class Planner:
     def __init__(self, brief: TripBrief, places: list[Place], notices: list[ClosureNotice],
                  exclude: set[str] | None = None, checked: set[str] | None = None) -> None:
+        places = annotate_travel(places, brief)
         self.brief, self.notices = brief, notices
         self.checked = {c.lower() for c in checked} if checked is not None else None
         self.exclude = {e.lower() for e in (exclude or set())}
@@ -149,18 +185,24 @@ class Planner:
             if picks and R.is_full_day(picks[0]):
                 continue
             if not R.is_full_day(p):
-                tentative = sorted(picks + [p], key=lambda x: -x.effort)  # strenuous in the morning
-                if not place_all(tentative, windows_for(role, self.brief))[1]:
+                tentative = sorted(picks + [p], key=lambda x: (x.best_time != "sunrise", -x.effort))
+                early = any(x.best_time == "sunrise" for x in tentative)
+                if early and role != "full":
+                    continue
+                if not place_all(tentative, windows_for(role, self.brief, early))[1]:
                     continue  # would not fit the day's time windows
+                if role != "full" and (p.effort > 1 or p.duration_min > 120):
+                    continue  # arrival and departure days stay light
             picks.append(p)
             spent += cost
             city = city or p.city
-        picks.sort(key=lambda p: -p.effort)
+        picks.sort(key=lambda p: (p.best_time != "sunrise", -p.effort))
         return picks, cap
 
     def _plan_b(self, day: date, used: set[str]) -> str:
         for p in self.candidates:
-            if p.name not in used and p.effort == 1 and not R.closed_on(p, day, self.notices):
+            if p.name not in used and p.effort == 1 and not R.is_full_day(p) and not R.closed_on(p, day, self.notices) \
+                    and not (p.travel_min and p.travel_min >= 60):
                 where = f" ({p.city})" if p.city else ""
                 return f"Plan B for weather or a closure: {p.name}{where}."
         return ""
@@ -181,15 +223,29 @@ class Planner:
                                     title="Transfer to airport", notes="Leave at least 3 hours before departure."))
         elif picks and R.is_full_day(picks[0]):
             p = picks[0]
-            start = 9 * 60
-            end = min(start + p.duration_min, R.DINNER[0] - 30)
-            note = "Full-day outing: start early, allow extra time for the drive, take lunch on the way. "
+            note = "Full-day outing: start early and take lunch on the way. "
             if (p.altitude_m or 0) >= R.ALTITUDE_M:
                 note += f"Altitude about {p.altitude_m} m. "
-            blocks.append(Block(start=R.hm(start), end=R.hm(end), kind="activity", title=p.name, place=p.name,
-                                notes=(note + p.notes).strip(), sources=p.sources))
+            if R.is_excursion(p):
+                start = 8 * 60
+                tm = p.travel_min or 0
+                est = " (estimated, confirm the route)" if p.travel_estimated else ""
+                blocks.append(Block(start=R.hm(start), end=R.hm(start + tm), kind="transfer",
+                                    title=f"Travel to {p.name} (about {tm / 60:.1f} h each way{est})"))
+                vs = start + tm
+                ve = vs + p.duration_min
+                blocks.append(Block(start=R.hm(vs), end=R.hm(ve), kind="activity", title=p.name, place=p.name,
+                                    notes=(note + p.notes).strip(), sources=p.sources))
+                blocks.append(Block(start=R.hm(ve), end=R.hm(ve + tm), kind="transfer",
+                                    title="Return to the hotel"))
+            else:
+                start = 9 * 60
+                end = min(start + p.duration_min, R.DINNER[0] - 30)
+                blocks.append(Block(start=R.hm(start), end=R.hm(end), kind="activity", title=p.name, place=p.name,
+                                    notes=(note + p.notes).strip(), sources=p.sources))
         else:
-            self._emit(blocks, picks, windows_for(role, self.brief))
+            early = any(p.best_time == "sunrise" for p in picks)
+            self._emit(blocks, picks, windows_for(role, self.brief, early))
             blocks.append(Block(start=R.hm(R.LUNCH[0]), end=R.hm(R.LUNCH[1]), kind="meal", title="Lunch"))
             blocks.append(Block(start=R.hm(rest_a), end=R.hm(rest_b), kind="rest", title="Rest at the hotel"))
         if role != "departure":

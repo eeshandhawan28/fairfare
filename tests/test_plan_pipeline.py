@@ -45,7 +45,7 @@ def test_pack_formats_include_citations_and_escape_html(web, family, tmp_path):
 def test_static_notice_and_trace_health(web, family, tmp_path):
     r, events = _run(web, family, tmp_path, static=load_closures())
     names = [e["name"] for e in events if e["type"] == "span"]
-    for n in ("places", "closures", "entry", "schedule", "pack", "research:place", "research:closure"):
+    for n in ("places", "closures", "research:visa", "schedule", "pack", "research:place", "research:closure"):
         assert n in names
     assert events[-1]["type"] == "run_end" and events[-1]["status"] == "ok"
     assert not [i for i in lint_trace(events) if i["severity"] == "high"]

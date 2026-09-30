@@ -92,7 +92,7 @@ class Researcher:
                     continue
                 if getattr(self.search, "digest_mode", False) and results:
                     # direct page fetch is unavailable: the search digest is the evidence, extracted once per query
-                    digest = getattr(self.search, "last_digest", "")
+                    digest = results[0].digest
                     if digest and digest not in seen_urls:
                         seen_urls.add(digest)
                         stats["pages"] += 1

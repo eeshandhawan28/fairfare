@@ -13,6 +13,7 @@ class SearchResult(BaseModel):
     title: str
     url: str
     snippet: str = ""
+    digest: str = ""  # model-written summary of the whole search (claude-cli provider only)
 
 
 class SearchProvider(Protocol):

@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 
 from fairfare.models import Claim, Evidence, Place, TripBrief
+from fairfare.planning.places import llm_merge_aliases, merge_similar
 from fairfare.research import Researcher, domain, get, independent_domains
 
 GOV_LABELS = {"gov", "govt", "gob", "gouv", "go", "mil"}
@@ -21,12 +22,32 @@ def is_official(url: str) -> bool:
 # ---------- places ----------
 
 PLACES_INSTR = (
-    "Extract specific visitable places or activities in {destination} (not generic advice). "
-    "For each, fill data with what the page states; omit fields the page does not state."
+    "Extract specific, named, visitable places in {destination}: attractions, temples, parks, museums, viewpoints, "
+    "markets, districts, day-trip destinations. subject = the place's own proper name. Do NOT output dishes, cuisines, "
+    "food categories, tour operators or hotels as places (a dish must have kind 'food'). "
+    "For each, fill data only with what the page states; omit fields it does not state. "
+    "city = the city or town the place is in. from_center_min = one-way travel minutes from the main city centre, "
+    "only if stated. best_time = 'sunrise' only if the page says it must be done at sunrise/dawn. "
+    "opens/closes = daily opening and closing time as HH:MM 24h, only if stated. Quote the sentence that supports it."
 )
 PLACES_SCHEMA = ('"city": "string", "kind": "sight|nature|food|market|culture|adventure|wellness", '
                  '"duration_min": number, "effort": "1 easy|2 moderate|3 strenuous", '
-                 '"altitude_m": number, "min_age": number')
+                 '"altitude_m": number, "min_age": number, "from_center_min": number, '
+                 '"best_time": "sunrise|any", "opens": "HH:MM", "closes": "HH:MM"')
+
+
+def _time_in_quote(t: str, quote: str) -> bool:
+    """Opening times are kept only if the clock time is readable in the quote itself."""
+    m = re.fullmatch(r"(\d{1,2}):(\d{2})", t.strip())
+    if not m:
+        return False
+    h, mi = int(m.group(1)), int(m.group(2))
+    q = quote.lower().replace(" ", "").replace(".", ":")
+    h12 = h % 12 or 12
+    forms = {f"{h}:{mi:02d}", f"{h:02d}:{mi:02d}", f"{h12}:{mi:02d}"}
+    if mi == 0:
+        forms |= {f"{h12}{'am' if h < 12 else 'pm'}", f"{h}h"}
+    return any(f in q for f in forms)
 
 
 def _altitude(v):
@@ -64,7 +85,14 @@ def _int(v, default=None):
 
 def claim_to_place(c: Claim, hidden_gem: bool = False) -> Place:
     d = c.data
+    opens, closes = str(get(d, "opens", "") or ""), str(get(d, "closes", "") or "")
+    opens = opens if _time_in_quote(opens, c.evidence.quote) else ""
+    closes = closes if _time_in_quote(closes, c.evidence.quote) else ""
+    ft = _int(get(d, "from_center_min"))
+    best = "sunrise" if str(get(d, "best_time", "")).lower() == "sunrise" and \
+        re.search(r"sunrise|dawn|early morning", c.evidence.quote, re.I) else "any"
     return Place(
+        travel_min=ft if ft and ft >= 60 else None, best_time=best, opens=opens, closes=closes,
         name=c.subject.strip(), city=str(get(d, "city", "")), kind=str(get(d, "kind", "sight")),
         duration_min=max(30, min(_minutes(get(d, "duration_min")), 480)),
         effort=max(1, min(_int(get(d, "effort"), 1), 3)), altitude_m=_altitude(get(d, "altitude_m")),
@@ -73,18 +101,15 @@ def claim_to_place(c: Claim, hidden_gem: bool = False) -> Place:
 
 def research_places(r: Researcher, brief: TripBrief) -> list[Place]:
     dest = brief.destination
-    queries = [f"top things to do in {dest}", f"{dest} attractions families with older parents",
+    who = "families with older parents" if any(t.age >= 60 for t in brief.travellers) else \
+        "families with young children" if any(t.age < 12 for t in brief.travellers) else "visitors"
+    queries = [f"top things to do in {dest}", f"{dest} attractions {who}",
                f"{dest} day trips from the city"] + [f"{dest} {i}" for i in brief.interests[:3]]
+    if getattr(r.search, "digest_mode", False):
+        queries = queries[:5]
     claims = r.run(queries, "place", PLACES_INSTR.format(destination=dest), PLACES_SCHEMA)
-    merged: dict[str, Place] = {}
-    for c in claims:
-        p = claim_to_place(c)
-        key = p.name.lower()
-        if key in merged:
-            merged[key].evidence.extend(p.evidence)
-        else:
-            merged[key] = p
-    return list(merged.values())
+    places = merge_similar([claim_to_place(c) for c in claims])
+    return llm_merge_aliases(r.llm, places)
 
 
 # ---------- local intel (forums, reddit) ----------
@@ -101,8 +126,12 @@ INTEL_SCHEMA = ('"sentiment": "positive|negative", "place": "string", "city": "s
 def research_local_intel(r: Researcher, brief: TripBrief) -> tuple[list[Place], list[Claim]]:
     """Returns (hidden gems confirmed by >=2 independent domains, avoid claims needing review)."""
     dest = brief.destination
-    queries = [f"site:reddit.com {dest} hidden gems worth visiting", f"site:reddit.com {dest} tourist scams avoid",
-               f"site:reddit.com {dest} trip report itinerary", f"{dest} travel forum underrated places"]
+    if getattr(r.search, "digest_mode", False):  # site: operators do not survive summarised search
+        queries = [f"reddit {dest} hidden gems locals recommend", f"reddit {dest} tourist scams to avoid",
+                   f"{dest} travel forum underrated places"]
+    else:
+        queries = [f"site:reddit.com {dest} hidden gems worth visiting", f"site:reddit.com {dest} tourist scams avoid",
+                   f"site:reddit.com {dest} trip report itinerary", f"{dest} travel forum underrated places"]
     claims = r.run(queries, "intel", INTEL_INSTR.format(destination=dest), INTEL_SCHEMA)
     positives: dict[str, list[Claim]] = {}
     avoid: list[Claim] = []
@@ -126,7 +155,8 @@ def research_local_intel(r: Researcher, brief: TripBrief) -> tuple[list[Place], 
 
 VISA_INSTR = (
     "Extract entry rules for {passport} passport holders visiting {destination}: visa-free days, e-visa, "
-    "required documents, fees, validity. Quote the exact sentence."
+    "required documents, fees, validity, how early to apply and where (official portal or embassy). "
+    "Quote the exact sentence."
 )
 VISA_SCHEMA = '"requirement": "visa_free|evisa|visa_required|unclear", "days": number'
 
@@ -137,28 +167,126 @@ def research_visa(r: Researcher, brief: TripBrief) -> list[Claim]:
     claims = r.run(q, "visa", VISA_INSTR.format(passport=brief.passport, destination=brief.destination), VISA_SCHEMA)
     for c in claims:
         c.data["official"] = is_official(c.evidence.url)
-    return sorted(claims, key=lambda c: not c.data["official"])
+    return tidy(sorted(claims, key=lambda c: not c.data["official"]), limit=5)
 
 
 # ---------- ground transport ----------
 
 TRANSPORT_INSTR = (
-    "Extract ground transport options in {destination}: ride-hailing apps, airport transfers, car rental, "
-    "trains, private drivers/guides. Include a phone/URL in data.contact ONLY if it appears verbatim in the page."
+    "Extract practical ground transport a visitor can actually use in {destination}: ride-hailing apps, metro/train/"
+    "airport express, taxi rules, how to get from the airport to the centre. Skip vendor adverts and booking-site "
+    "listings. Include a phone/URL in data.contact ONLY if it appears verbatim in the page."
 )
 TRANSPORT_SCHEMA = '"type": "ride_hailing|rental|transfer|train|driver|guide", "name": "string", "contact": "string"'
 
 
 def research_transport(r: Researcher, brief: TripBrief) -> list[Claim]:
     d = brief.destination
-    q = [f"{d} taxi apps tourists ride hailing", f"{d} car rental with driver tourists", f"{d} airport transfer"]
+    q = [f"{d} taxi apps tourists ride hailing", f"{d} airport to city centre transport options",
+         f"{d} car rental with driver tourists"]
+    if getattr(r.search, "digest_mode", False):
+        q = q[:2]
     claims = r.run(q, "transport", TRANSPORT_INSTR.format(destination=d), TRANSPORT_SCHEMA)
     for c in claims:
         contact = str(get(c.data, "contact", ""))
         if contact and _norm_digits(contact) not in _norm_digits(c.evidence.quote):
             c.data["contact"] = ""  # a contact not present in the quote is not verified
-    return claims
+    return tidy(claims, limit=6)
 
 
 def _norm_digits(s: str) -> str:
     return re.sub(r"[^\w@.]", "", s.lower())
+
+
+# ---------- near-duplicate tidying ----------
+
+
+def _key(text: str) -> str:
+    return re.sub(r"[^a-z0-9 ]+", " ", text.lower()).strip()
+
+
+def tidy(claims: list[Claim], limit: int = 8, similarity: float = 0.72) -> list[Claim]:
+    """Drop near-duplicate statements (same fact from several pages) and cap the list. Order is kept."""
+    from difflib import SequenceMatcher
+    kept: list[Claim] = []
+    for c in claims:
+        k = _key(c.text)
+        if any(SequenceMatcher(None, k, _key(o.text)).ratio() >= similarity or
+               (len(k.split()) >= 4 and set(k.split()) <= set(_key(o.text).split())) for o in kept):
+            continue
+        kept.append(c)
+    return kept[:limit]
+
+
+# ---------- costs ----------
+
+COST_INSTR = (
+    "Extract concrete prices a visitor to {destination} would pay: airport-to-city transfer or taxi fare, metro/train "
+    "ticket, entry fees for major sights, a typical restaurant meal, street food, a SIM card, hotel per night. "
+    "The quote MUST contain the number. subject = what it costs (e.g. 'Airport taxi to centre')."
+)
+COST_SCHEMA = ('"item": "airport_transfer|taxi|public_transport|entry_ticket|meal|sim_card|hotel|other", '
+               '"amount_low": number, "amount_high": number, "currency": "string", "per": "person|group|night|ride"')
+
+
+def research_costs(r: Researcher, brief: TripBrief) -> list[Claim]:
+    d = brief.destination
+    q = [f"{d} typical prices tourists taxi airport transfer meal cost", f"{d} entry fees attractions prices SIM card cost"]
+    claims = r.run(q, "cost", COST_INSTR.format(destination=d), COST_SCHEMA)
+    good = [c for c in claims if re.search(r"\d", c.evidence.quote) and get(c.data, "currency")]
+    return tidy(good, limit=10)
+
+
+# ---------- where to stay ----------
+
+STAY_INSTR = (
+    "Extract named hotels, riads, hostels or neighbourhoods that the page recommends for {who} visiting "
+    "{destination} on a {tier} budget. subject = the hotel or neighbourhood name."
+)
+STAY_SCHEMA = '"type": "hotel|hostel|neighbourhood", "area": "string", "price_note": "string"'
+
+
+def research_stay(r: Researcher, brief: TripBrief) -> list[Claim]:
+    who = "families" if len(brief.travellers) > 2 else "couples" if len(brief.travellers) == 2 else "solo travellers"
+    q = [f"best area to stay in {brief.destination} for {who} {brief.budget_tier} hotels"]
+    claims = r.run(q, "stay", STAY_INSTR.format(who=who, destination=brief.destination, tier=brief.budget_tier), STAY_SCHEMA)
+    return tidy(claims, limit=6)
+
+
+# ---------- food ----------
+
+FOOD_INSTR = (
+    "Extract local dishes worth trying and named restaurants, street-food areas or food markets in {destination}. "
+    "subject = dish or venue name; data.kind says which. {diet}"
+)
+FOOD_SCHEMA = '"kind": "dish|restaurant|market", "vegetarian": "yes|no|unknown", "area": "string"'
+
+
+def research_food(r: Researcher, brief: TripBrief) -> list[Claim]:
+    diet = brief.dietary or [i for i in brief.interests if "vegetarian" in i.lower() or "vegan" in i.lower()]
+    extra = f"Note which are suitable for: {', '.join(diet)}." if diet else ""
+    q = [f"best local food to try in {brief.destination} restaurants street food"]
+    if diet:
+        q.append(f"{brief.destination} {diet[0]} friendly restaurants")
+    claims = r.run(q, "food", FOOD_INSTR.format(destination=brief.destination, diet=extra), FOOD_SCHEMA)
+    return tidy(claims, limit=10)
+
+
+# ---------- emergency and local contacts ----------
+
+CONTACT_INSTR = (
+    "Extract emergency and consular contacts for a {passport} traveller in {destination}: police, ambulance, tourist "
+    "police, the {passport} embassy or consulate. Put the phone number in data.phone ONLY if it is in the quote."
+)
+CONTACT_SCHEMA = '"type": "emergency|embassy|tourist_police|hospital", "phone": "string"'
+
+
+def research_contacts(r: Researcher, brief: TripBrief) -> list[Claim]:
+    d = brief.destination
+    q = [f"{d} emergency numbers police ambulance tourists", f"{brief.passport} embassy in {d} contact"]
+    claims = r.run(q, "contact", CONTACT_INSTR.format(passport=brief.passport, destination=d), CONTACT_SCHEMA)
+    for c in claims:
+        phone = str(get(c.data, "phone", ""))
+        if phone and _norm_digits(phone) not in _norm_digits(c.evidence.quote):
+            c.data["phone"] = ""
+    return tidy(claims, limit=6)

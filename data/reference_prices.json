@@ -1,6 +1,7 @@
 [
   {
     "category": "activity",
+    "destination": "Kazakhstan",
     "keywords": ["city tour", "almaty city"],
     "low": 2000,
     "high": 4000,
@@ -10,6 +11,7 @@
   },
   {
     "category": "transfer",
+    "destination": "Kazakhstan",
     "keywords": ["airport transfer"],
     "low": 1000,
     "high": 2000,

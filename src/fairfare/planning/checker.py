@@ -6,6 +6,7 @@ from typing import Optional
 
 from fairfare.models import ClosureNotice, Place, TripBrief, TripPlan
 from fairfare.planning import rules as R
+from fairfare.planning.places import annotate_travel, canon, is_food_item
 from fairfare.planning.scheduler import Planner
 
 
@@ -18,7 +19,8 @@ class Violation:
 
 
 # rules whose fix is "drop this place and re-plan"
-EXCLUDING = {"closed_place", "unverified_place", "min_age", "altitude_early", "avoided_place"}
+EXCLUDING = {"closed_place", "unverified_place", "min_age", "altitude_early", "avoided_place", "food_scheduled",
+             "excursion_short_day"}
 
 
 def check_plan(plan: TripPlan, places: list[Place], notices: list[ClosureNotice]) -> list[Violation]:
@@ -39,6 +41,10 @@ def check_plan(plan: TripPlan, places: list[Place], notices: list[ClosureNotice]
                 out.append(Violation("unverified_place", day, f"{b.title} has no verified source.", b.place))
                 continue
             load += R.place_cost(p)
+            if is_food_item(p):
+                out.append(Violation("food_scheduled", day, f"{p.name} is a food item, not a place.", p.name))
+            if R.is_excursion(p) and d.role != "full":
+                out.append(Violation("excursion_short_day", day, f"{p.name} is a day trip on a short day.", p.name))
             if any(a.lower() in p.name.lower() or a.lower() == p.kind.lower() for a in brief.avoid):
                 out.append(Violation("avoided_place", day, f"{p.name} is on the avoid list.", p.name))
             if R.closed_on(p, d.day, notices):
@@ -71,6 +77,14 @@ def check_plan(plan: TripPlan, places: list[Place], notices: list[ClosureNotice]
                 out.append(Violation("no_transfer", day, f"No transfer between '{a.title}' and '{b.title}'."))
         if len(acts) > R.PACE_MAX_ACTIVITIES[brief.pace] and d.role == "full":
             out.append(Violation("too_many_activities", day, f"{len(acts)} activities exceeds the {brief.pace} pace."))
+    seen: dict[str, str] = {}
+    for d in plan.days:
+        for b in d.blocks:
+            if b.kind == "activity" and b.place:
+                k = canon(b.place)
+                if k in seen:
+                    out.append(Violation("duplicate_place", d.day.isoformat(), f"{b.place} appears more than once."))
+                seen.setdefault(k, d.day.isoformat())
     if R.needs_long_rest(brief):
         for a, b in zip(full_days, full_days[1:]):
             if b - a < 2:
@@ -89,6 +103,7 @@ def plan_with_repair(brief: TripBrief, places: list[Place], notices: list[Closur
                      max_iter: int = 5, checked: set[str] | None = None) -> tuple[TripPlan, list[Violation], int]:
     """Plan, check, drop offending places, re-plan. Returns (plan, remaining violations, iterations)."""
     exclude: set[str] = set()
+    places = annotate_travel(places, brief)
     for it in range(1, max_iter + 1):
         planner = Planner(brief, places, notices, exclude, checked)
         plan = planner.plan()

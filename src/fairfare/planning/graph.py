@@ -13,13 +13,15 @@ from langgraph.graph import END, StateGraph
 
 from fairfare import tracing
 from fairfare.agents.closure_scout import scout_closures
-from fairfare.agents.destination import (research_local_intel, research_places, research_transport,
-                                         research_visa)
+from fairfare.agents.hours_scout import scout_hours
+from fairfare.agents.destination import (research_contacts, research_costs, research_food, research_local_intel,
+                                         research_places, research_stay, research_transport, research_visa)
 from fairfare.graph import _traced
 from fairfare.llm import LLM, TracedLLM
 from fairfare.models import Claim, ClosureNotice, Place, TripBrief, TripPlan
 from fairfare.pack import render_html, render_markdown, render_whatsapp
 from fairfare.planning.checker import Violation, plan_with_repair
+from fairfare.planning.places import llm_merge_aliases, merge_similar
 from fairfare.planning.scheduler import _rank, eligible
 from fairfare.research import Researcher
 from fairfare.tools.fetch import Fetcher
@@ -38,6 +40,10 @@ class PlanState(TypedDict, total=False):
     checked: list[str]
     visa: list[Claim]
     transport: list[Claim]
+    costs: list[Claim]
+    stay: list[Claim]
+    food: list[Claim]
+    contacts: list[Claim]
     plan: TripPlan
     violations: list[Violation]
     markdown: str
@@ -46,23 +52,35 @@ class PlanState(TypedDict, total=False):
 
 
 def _merge_places(*groups: list[Place]) -> list[Place]:
-    merged: dict[str, Place] = {}
-    for g in groups:
-        for p in g:
-            key = p.name.lower()
-            if key in merged:
-                merged[key].evidence.extend(e for e in p.evidence if e not in merged[key].evidence)
-                merged[key].hidden_gem = merged[key].hidden_gem or p.hidden_gem
-            else:
-                merged[key] = p.model_copy(deep=True)
-    return list(merged.values())
+    return merge_similar([p for g in groups for p in g])
+
+
+def parallel(*fns, workers: int = 4) -> list[Any]:
+    """Run independent research steps concurrently. Each thread keeps the caller's tracer."""
+    import contextvars
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = [ex.submit(contextvars.copy_context().run, fn) for fn in fns]
+        return [f.result() for f in futures]
 
 
 def build_plan_graph(researcher: Researcher, static_notices: list[ClosureNotice]):
     def places_node(s: PlanState) -> PlanState:
-        base = research_places(researcher, s["brief"])
-        gems, avoid = research_local_intel(researcher, s["brief"])
-        return {"places": _merge_places(base, gems), "avoid": avoid}
+        brief = s["brief"]
+
+        def places_and_intel():
+            base = research_places(researcher, brief)
+            gems, avoid = research_local_intel(researcher, brief)
+            return base, gems, avoid
+
+        (base, gems, avoid), visa, transport, costs, stay, food, contacts = parallel(
+            places_and_intel, lambda: research_visa(researcher, brief), lambda: research_transport(researcher, brief),
+            lambda: research_costs(researcher, brief), lambda: research_stay(researcher, brief),
+            lambda: research_food(researcher, brief), lambda: research_contacts(researcher, brief), workers=7)
+        places = llm_merge_aliases(researcher.llm, _merge_places(base, gems))
+        return {"places": places, "avoid": avoid, "visa": visa, "transport": transport, "costs": costs,
+                "stay": stay, "food": food, "contacts": contacts}
 
     def closures_node(s: PlanState) -> PlanState:
         brief = s["brief"]
@@ -70,11 +88,17 @@ def build_plan_graph(researcher: Researcher, static_notices: list[ClosureNotice]
         ranked = sorted((p for p in s["places"] if eligible(p, brief) is None), key=lambda p: _rank(p, brief))
         venues = [p.name for p in ranked[:MAX_VENUES_TO_VERIFY]]
         venues += [m for m in brief.must_do if m not in venues]
-        live = scout_closures(researcher, venues, brief)
-        return {"notices": list(static_notices) + live, "checked": venues}
-
-    def entry_node(s: PlanState) -> PlanState:
-        return {"visa": research_visa(researcher, s["brief"]), "transport": research_transport(researcher, s["brief"])}
+        by_name = {p.name: p for p in ranked}
+        live, hours = parallel(lambda: scout_closures(researcher, venues, brief),
+                               lambda: scout_hours(researcher, [by_name[v] for v in venues if v in by_name], brief),
+                               workers=2)
+        places = []
+        for p in s["places"]:
+            h = hours.get(p.name)
+            if h:
+                p = p.model_copy(update={k: v for k, v in h.items() if v})
+            places.append(p)
+        return {"notices": list(static_notices) + live, "checked": venues, "places": places}
 
     def schedule_node(s: PlanState) -> PlanState:
         plan, violations, iterations = plan_with_repair(s["brief"], s["places"], s["notices"], checked=set(s.get("checked", [])))
@@ -84,6 +108,7 @@ def build_plan_graph(researcher: Researcher, static_notices: list[ClosureNotice]
             plan.warnings.append("No verified places were found, so no activities were scheduled. "
                                  "Check search access and the model in the trace.")
         plan.visa, plan.transport, plan.avoid = s["visa"], s["transport"], s["avoid"]
+        plan.costs, plan.stay, plan.food, plan.contacts = s["costs"], s["stay"], s["food"], s["contacts"]
         tr = tracing.current()
         plan.run_id = tr.run_id if tr else ""
         return {"plan": plan, "violations": violations}
@@ -93,13 +118,12 @@ def build_plan_graph(researcher: Researcher, static_notices: list[ClosureNotice]
         return {"markdown": render_markdown(plan), "html": render_html(plan), "whatsapp": render_whatsapp(plan)}
 
     g = StateGraph(PlanState)
-    for name, fn in (("places", places_node), ("closures", closures_node), ("entry", entry_node),
+    for name, fn in (("places", places_node), ("closures", closures_node),
                      ("schedule", schedule_node), ("pack", pack_node)):
         g.add_node(f"{name}_step", _traced(name, fn))  # node ids must not collide with state keys
     g.set_entry_point("places_step")
     g.add_edge("places_step", "closures_step")
-    g.add_edge("closures_step", "entry_step")
-    g.add_edge("entry_step", "schedule_step")
+    g.add_edge("closures_step", "schedule_step")
     g.add_edge("schedule_step", "pack_step")
     g.add_edge("pack_step", END)
     return g.compile()

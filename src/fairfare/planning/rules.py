@@ -41,8 +41,17 @@ def group_cap(brief: TripBrief) -> int:
 FULL_DAY_MIN = 210  # longer than the morning window: the outing takes the whole day
 
 
+def is_excursion(p: Place) -> bool:
+    return p.travel_min is not None and p.travel_min >= 60
+
+
 def is_full_day(p: Place) -> bool:
-    return p.duration_min > FULL_DAY_MIN
+    return p.duration_min > FULL_DAY_MIN or is_excursion(p)
+
+
+def excursion_hours(p: Place) -> float:
+    """Door-to-door hours: travel both ways plus the visit."""
+    return (2 * (p.travel_min or 0) + p.duration_min) / 60
 
 
 def place_cost(p: Place) -> int:
@@ -82,6 +91,9 @@ def altitude_allowed(index: int, n_days: int) -> bool:
 
 def closed_on(place: Place, day: date, notices: list[ClosureNotice]) -> ClosureNotice | None:
     name = place.name.lower()
+    if day.strftime("%A").lower() in {d.lower() for d in place.closed_days}:
+        return ClosureNotice(venue=place.name, keywords=[name], closed_from=day, closed_to=day,
+                             reason="closed on this weekday", source="opening hours in the place's sources")
     for n in notices:
         if any(k in name or name in k for k in n.keywords if k) and n.covers(day):
             return n
@@ -89,4 +101,4 @@ def closed_on(place: Place, day: date, notices: list[ClosureNotice]) -> ClosureN
 
 
 def transfer_minutes(prev_city: str, city: str) -> int:
-    return 45 if prev_city and city and prev_city.lower() != city.lower() else 30
+    return 60 if prev_city and city and prev_city.lower() != city.lower() else 40

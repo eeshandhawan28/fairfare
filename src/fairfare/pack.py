@@ -27,30 +27,109 @@ def _claims_md(claims: list[Claim], empty: str) -> list[str]:
     return out
 
 
+COST_CATEGORIES = {"airport_transfer": "airport transfer", "taxi": "taxi", "public_transport": "public transport",
+                   "entry_ticket": "entry tickets", "meal": "a meal", "sim_card": "SIM card", "hotel": "hotel"}
+
+
+def load_label(load: int, cap: int) -> str:
+    if cap <= 0 or load <= 0:
+        return "light"
+    r = load / cap
+    return "light" if r <= 0.5 else "moderate" if r <= 0.85 else "full for your group's pace"
+
+
+def _cost_line(c: Claim) -> str:
+    d = c.data
+    lo, hi = d.get("amount_low"), d.get("amount_high")
+    amt = ""
+    if lo not in (None, ""):
+        amt = f"{lo}" if hi in (None, "", lo) else f"{lo}-{hi}"
+        amt = f" ({amt} {d.get('currency', '')}{' per ' + str(d['per']) if d.get('per') else ''})"
+    return f"{c.subject}: {c.text}{amt}"
+
+
+def missing_costs(plan: TripPlan) -> list[str]:
+    found = {str(c.data.get("item", "")) for c in plan.costs}
+    return [label for key, label in COST_CATEGORIES.items() if key not in found and key != "hotel"]
+
+
+def evidence_note(plan: TripPlan) -> str:
+    claims = plan.visa + plan.transport + plan.avoid + plan.costs + plan.stay + plan.food + plan.contacts
+    ev = [e for p in plan.places for e in p.evidence] + [c.evidence for c in claims]
+    if ev and all(e.retrieved_at == "search_digest" for e in ev):
+        return ("Evidence quality: page fetching was unavailable, so facts come from web-search summaries rather "
+                "than the pages themselves. Treat every line as a lead and confirm it at the linked source.")
+    return ""
+
+
+def _lines(claims: list[Claim], fmt) -> list[str]:
+    return [f"- {fmt(c)} [{domain(c.evidence.url)}]({c.evidence.url})" for c in claims]
+
+
+def _extra_sections(plan: TripPlan) -> list[str]:
+    out: list[str] = []
+    if plan.stay:
+        out += ["## Where to stay", *_lines(plan.stay, lambda c: f"**{c.subject}**"
+                + (f" ({c.data['area']})" if c.data.get("area") else "") + f". {c.text}"), ""]
+    out += ["## What things cost"]
+    if plan.costs:
+        out += _lines(plan.costs, _cost_line)
+    miss = missing_costs(plan)
+    if miss:
+        out.append(f"- No sourced price found for: {', '.join(miss)}. Ask for these in writing before you pay.")
+    out.append("")
+    if plan.food:
+        out += ["## What to eat", *_lines(plan.food, lambda c: f"**{c.subject}**. {c.text}"
+                + (" (vegetarian-friendly)" if str(c.data.get("vegetarian", "")).lower() == "yes" else "")), ""]
+    gems = [p for p in plan.places if p.hidden_gem]
+    if gems:
+        out += ["## Hidden gems (mentioned by several independent travellers)",
+                *[f"- **{p.name}**. {p.notes} " + " ".join(f"[{domain(u)}]({u})" for u in p.sources[:3]) for p in gems], ""]
+    if plan.avoid:
+        out += ["## Scams and things to avoid", *_lines(plan.avoid, lambda c: c.text), ""]
+    if plan.contacts:
+        out += ["## Emergency and local contacts", *_lines(plan.contacts, lambda c: f"{c.text}"
+                + (f" Phone: {c.data['phone']}." if c.data.get("phone") else "")), ""]
+    return out
+
+
 def render_markdown(plan: TripPlan, audit_report: Optional[str] = None) -> str:
     b = plan.brief
     ages = ", ".join(f"{t.name} ({t.age})" for t in b.travellers) or "not given"
     out = [f"# {b.destination}: {b.start.isoformat()} to {b.end.isoformat()}",
            f"{b.nights} nights. Travellers: {ages}. Pace: {b.pace}. Budget: {b.budget_tier}.", ""]
+    note = evidence_note(plan)
+    if note:
+        out += [f"> {note}", ""]
     if plan.warnings:
         out += ["## Check before you go", *[f"- {w}" for w in plan.warnings], ""]
     out.append("## Day by day")
+    ideas = [c.subject for c in plan.food]
+    stay = plan.stay[0].subject if plan.stay else ""
+    n_meal = 0
     for i, d in enumerate(plan.days, 1):
-        out.append(f"### Day {i}: {d.day.strftime('%A %d %B')} ({d.role} day, effort {d.load} of {d.cap})")
+        out.append(f"### Day {i}: {d.day.strftime('%A %d %B')} ({d.role} day, {load_label(d.load, d.cap)} load)")
         for blk in d.blocks:
             src = f" {_srcs(blk.sources)}" if blk.sources else ""
-            note = f" {blk.notes}" if blk.notes else ""
+            extra = ""
+            if blk.kind == "meal" and ideas:
+                extra = f" Ideas: {ideas[n_meal % len(ideas)]}" + (f" or {ideas[(n_meal + 1) % len(ideas)]}" if len(ideas) > 1 else "") + " (see What to eat)."
+                n_meal += 2
+            if blk.kind == "arrival" and stay:
+                extra = f" Suggested area or stay: {stay} (see Where to stay)."
+            note = f" {blk.notes}{extra}" if blk.notes else extra
             out.append(f"- {blk.start}-{blk.end} **{blk.title}**.{note}{src}")
         if d.plan_b:
             out.append(f"- {d.plan_b}")
         out.append("")
-    out += ["## Entry and visa", *_claims_md(plan.visa, "No entry rules found yet. Check the official embassy site."), ""]
+    out += _extra_sections(plan)
+    out += ["## Entry and visa", *_claims_md(plan.visa, "No entry rules found yet. Check the official embassy site."),
+            "- If a visa or e-visa is needed, apply early and only through the official portal or embassy.", ""]
     out += ["## Getting around", *_claims_md(plan.transport, "No verified transport options found yet."), ""]
-    if plan.avoid:
-        out += ["## Reports to be careful about", *_claims_md(plan.avoid, ""), ""]
     if audit_report:
         out += ["## Quote audit", audit_report, ""]
-    urls = sorted({e.url for p in plan.places for e in p.evidence} | {c.evidence.url for c in plan.visa + plan.transport + plan.avoid})
+    urls = sorted({e.url for p in plan.places for e in p.evidence} | {
+        c.evidence.url for c in plan.visa + plan.transport + plan.avoid + plan.costs + plan.stay + plan.food + plan.contacts})
     out += ["## Sources", *[f"- {u}" for u in urls], "", f"Run: {plan.run_id}"]
     return "\n".join(out) + "\n"
 
@@ -84,8 +163,11 @@ def render_html(plan: TripPlan, audit_report: Optional[str] = None) -> str:
             + (f" <small>{e(blk.notes)}</small>" if blk.notes else "") + "</li>" for blk in d.blocks)
         pb = f"<p class='b'>{e(d.plan_b)}</p>" if d.plan_b else ""
         parts.append(f"<section><h2>Day {i}: {e(d.day.strftime('%A %d %B'))}</h2><ul>{rows}</ul>{pb}</section>")
-    for title, claims in (("Entry and visa", plan.visa), ("Getting around", plan.transport),
-                          ("Reports to be careful about", plan.avoid)):
+    if evidence_note(plan):
+        parts.insert(1, f"<p class='b'>{e(evidence_note(plan))}</p>")
+    for title, claims in (("Where to stay", plan.stay), ("What things cost", plan.costs), ("What to eat", plan.food),
+                          ("Scams and things to avoid", plan.avoid), ("Emergency and local contacts", plan.contacts),
+                          ("Entry and visa", plan.visa), ("Getting around", plan.transport)):
         if claims:
             def item(c: Claim) -> str:
                 tag = ""
@@ -93,7 +175,8 @@ def render_html(plan: TripPlan, audit_report: Optional[str] = None) -> str:
                     tag = " (official source)" if c.data.get("official") else " (unofficial source, verify)"
                 contact = f" Contact: {c.data['contact']} (from {domain(c.evidence.url)}, not independently verified)." \
                     if c.data.get("contact") else ""
-                return f"<li>{e(c.text)}{e(tag)}{e(contact)} <small>{e(domain(c.evidence.url))}</small></li>"
+                text = _cost_line(c) if c.kind == "cost" else c.text
+                return f"<li>{e(text)}{e(tag)}{e(contact)} <small>{e(domain(c.evidence.url))}</small></li>"
             parts.append(f"<section><h2>{title}</h2><ul>" + "".join(item(c) for c in claims) + "</ul></section>")
     if audit_report:
         parts.append(f"<section><h2>Quote audit</h2><pre>{e(audit_report)}</pre></section>")

@@ -14,7 +14,7 @@ from langgraph.graph import END, StateGraph
 from fairfare import tracing
 from fairfare.agents.closures import check_closures
 from fairfare.agents.closure_scout import scout_closures
-from fairfare.agents.price_check import check_prices
+from fairfare.agents.price_check import check_gaps, check_prices
 from fairfare.agents.price_scout import scout_prices
 from fairfare.agents.quote_parser import parse_quote
 from fairfare.llm import LLM, TracedLLM
@@ -53,8 +53,8 @@ def build_graph(llm: LLM, refs: list[ReferencePrice], notices: list[ClosureNotic
         if researcher:  # live mode: build extra bands from the web; static bands stay first
             all_refs += scout_prices(researcher, state["lines"], state["brief"])
         found = check_prices(state["lines"], all_refs, max(1, len(state["brief"].travellers)),
-                             state["brief"].nights)
-        unreferenced = sum(1 for f in found if "No independent price reference" in f.message)
+                             state["brief"].nights, state["brief"].destination) + check_gaps(state["lines"])
+        unreferenced = sum(1 for f in found if "No independent price band" in f.message)
         tracing.event("price_coverage", lines=len(state["lines"]), unreferenced=unreferenced)
         return {"findings": state.get("findings", []) + found}
 

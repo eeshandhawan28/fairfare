@@ -6,7 +6,7 @@ domains, raise confidence; a single third-party mention stays low.
 from __future__ import annotations
 
 import re
-from datetime import date
+from datetime import date, timedelta
 
 from fairfare import tracing
 from fairfare.models import ClosureNotice, TripBrief
@@ -40,14 +40,18 @@ def _parse_date(value) -> date | None:
 
 
 def scout_closures(researcher: Researcher, venues: list[str], brief: TripBrief) -> list[ClosureNotice]:
-    notices: list[ClosureNotice] = []
+    from fairfare.planning.graph import parallel
+
     month = brief.start.strftime("%B")
     year = brief.start.year
-    for venue in venues:
+    digest = getattr(researcher.search, "digest_mode", False)
+
+    def one(venue: str) -> list[ClosureNotice]:
+        notices: list[ClosureNotice] = []
         queries = [f"{venue} closed maintenance {month} {year}",
                    f"{venue} closure dates {year}",
                    f"{venue} official site opening hours season"]
-        if getattr(researcher.search, "digest_mode", False):
+        if digest:
             queries = queries[:1]  # each search is slow; one focused query per venue
         claims = researcher.run(queries, "closure", INSTRUCTIONS.format(venue=venue, year=year), SCHEMA)
         parsed = []
@@ -62,6 +66,9 @@ def scout_closures(researcher: Researcher, venues: list[str], brief: TripBrief) 
                 # the date must be readable in the quote itself, not just asserted by the model
                 tracing.event("closure_claim_ungrounded_date", venue=venue, quote=c.evidence.quote)
                 continue
+            if start < brief.start - timedelta(days=90) and _parse_date(get(c.data, "closed_to")) is None:
+                tracing.event("closure_claim_stale", venue=venue, closed_from=str(start))
+                continue  # an open-ended closure that began months before the trip is probably long over
             end = _parse_date(get(c.data, "closed_to"))
             if end is not None and (end < start or not date_in_quote(end, c.evidence.quote)):
                 end = None  # unreadable or inconsistent end date: treat as "reopening not stated"
@@ -71,11 +78,16 @@ def scout_closures(researcher: Researcher, venues: list[str], brief: TripBrief) 
             official = _is_operator_domain(venue, c.evidence.url)
             n = independent_domains(peers)
             confidence = "high" if official else ("medium" if n >= 2 else "low")
+            if c.evidence.retrieved_at == "search_digest":
+                confidence = "low"  # a model-written search digest is never operator-grade evidence
             notices.append(ClosureNotice(
                 venue=venue, keywords=[venue.lower()] + _slug(venue)[:1], closed_from=start, closed_to=end,
                 reason=str(get(c.data, "reason", "")), confidence=confidence,
                 source=f'{c.evidence.url} ("{c.evidence.quote[:120]}") retrieved {c.evidence.retrieved_at}'))
-    return _dedupe(notices)
+        return notices
+
+    results = parallel(*[(lambda v=v: one(v)) for v in venues], workers=4) if venues else []
+    return _dedupe([n for group in results for n in group])
 
 
 def _dedupe(notices: list[ClosureNotice]) -> list[ClosureNotice]:

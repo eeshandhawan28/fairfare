@@ -24,6 +24,7 @@ class TripBrief(BaseModel):
     interests: list[str] = Field(default_factory=list)
     must_do: list[str] = Field(default_factory=list)
     avoid: list[str] = Field(default_factory=list)
+    dietary: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _sane(self) -> "TripBrief":
@@ -83,7 +84,7 @@ class QuoteLine(BaseModel):
 
 class Finding(BaseModel):
     severity: Literal["info", "warn", "high"]
-    kind: Literal["price", "closure"]
+    kind: Literal["price", "closure", "gap"]
     line: str
     message: str
     source: Optional[str] = None
@@ -94,6 +95,8 @@ class ReferencePrice(BaseModel):
     """An independently sourced price band for one kind of line item."""
 
     category: str
+    destination: str = ""  # empty = applies anywhere; otherwise only trips whose destination contains this
+    basis: str = ""  # how the band was built, shown to the user
     keywords: list[str]
     low: float
     high: float
@@ -139,6 +142,12 @@ class Place(BaseModel):
     altitude_m: Optional[int] = None
     min_age: Optional[int] = None
     hidden_gem: bool = False
+    travel_min: Optional[int] = None  # one-way minutes from the trip's base city; None = base city
+    travel_estimated: bool = False
+    best_time: str = "any"  # sunrise | any
+    opens: str = ""  # HH:MM, only kept when the time appears in the quote
+    closes: str = ""
+    closed_days: list[str] = Field(default_factory=list)  # weekday names the quote says it is closed
     evidence: list[Evidence] = Field(default_factory=list)
     notes: str = ""
 
@@ -176,6 +185,10 @@ class TripPlan(BaseModel):
     visa: list[Claim] = Field(default_factory=list)
     transport: list[Claim] = Field(default_factory=list)
     avoid: list[Claim] = Field(default_factory=list)
+    costs: list[Claim] = Field(default_factory=list)
+    stay: list[Claim] = Field(default_factory=list)
+    food: list[Claim] = Field(default_factory=list)
+    contacts: list[Claim] = Field(default_factory=list)
     closures: list[ClosureNotice] = Field(default_factory=list)
     places: list[Place] = Field(default_factory=list)
     run_id: str = ""

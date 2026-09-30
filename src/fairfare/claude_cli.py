@@ -12,12 +12,14 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
 from datetime import datetime, timezone
 
 from fairfare import tracing
 from fairfare.tools.search import SearchResult
 
 CLI_TIMEOUT = int(os.getenv("FAIRFARE_CLI_TIMEOUT", "180"))
+_SLOTS = threading.BoundedSemaphore(int(os.getenv("FAIRFARE_CLI_CONCURRENCY", "5")))
 
 
 def run_claude(prompt: str, model: str = "haiku", system: str | None = None, tools: str = "",
@@ -30,7 +32,8 @@ def run_claude(prompt: str, model: str = "haiku", system: str | None = None, too
         cmd += ["--tools", ""]
     if system:
         cmd += ["--system-prompt", system]
-    p = subprocess.run(cmd, input=prompt, capture_output=True, text=True, timeout=timeout, cwd="/tmp")
+    with _SLOTS:
+        p = subprocess.run(cmd, input=prompt, capture_output=True, text=True, timeout=timeout, cwd="/tmp")
     if p.returncode != 0:
         raise RuntimeError(f"claude CLI failed ({p.returncode}): {(p.stderr or p.stdout).strip()[:300]}")
     return p.stdout.strip()
@@ -51,7 +54,6 @@ class ClaudeCLISearch:
 
     def __init__(self, model: str = "haiku") -> None:
         self.model = model
-        self.last_digest = ""
 
     def search(self, query: str, n: int = 5) -> list[SearchResult]:
         with tracing.span("search", kind="tool", provider="claude-cli", query=query) as rec:
@@ -68,9 +70,8 @@ class ClaudeCLISearch:
                 data = {}
             hits = data.get("results", []) if isinstance(data, dict) else []
             digest = (data.get("digest") or "") if isinstance(data, dict) else ""
-            res = [SearchResult(title=h.get("title", ""), url=h["url"], snippet=digest[:200])
+            res = [SearchResult(title=h.get("title", ""), url=h["url"], snippet=digest[:200], digest=digest)
                    for h in hits if isinstance(h, dict) and str(h.get("url", "")).startswith("http")][:n]
-            self.last_digest = digest
             for r in res:
                 DIGESTS.setdefault(r.url, [])
                 if digest and digest not in DIGESTS[r.url]:
