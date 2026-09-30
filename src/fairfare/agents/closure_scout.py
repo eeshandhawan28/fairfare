@@ -47,6 +47,8 @@ def scout_closures(researcher: Researcher, venues: list[str], brief: TripBrief) 
         queries = [f"{venue} closed maintenance {month} {year}",
                    f"{venue} closure dates {year}",
                    f"{venue} official site opening hours season"]
+        if getattr(researcher.search, "digest_mode", False):
+            queries = queries[:1]  # each search is slow; one focused query per venue
         claims = researcher.run(queries, "closure", INSTRUCTIONS.format(venue=venue, year=year), SCHEMA)
         parsed = []
         venue_words = set(_slug(venue))

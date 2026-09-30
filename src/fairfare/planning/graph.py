@@ -25,7 +25,9 @@ from fairfare.research import Researcher
 from fairfare.tools.fetch import Fetcher
 from fairfare.tools.search import SearchProvider
 
-MAX_VENUES_TO_VERIFY = 14
+import os
+
+MAX_VENUES_TO_VERIFY = int(os.getenv("FAIRFARE_MAX_VENUES", "14"))
 
 
 class PlanState(TypedDict, total=False):

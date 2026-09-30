@@ -39,10 +39,15 @@ class LiteLLMClient:
         return agents.get(agent) or self.config.get("default") or DEFAULT_MODEL
 
     def complete(self, agent: str, system: str, user: str) -> str:
+        model = self.model_for(agent)
+        if model.startswith("claude-cli/"):
+            from fairfare.claude_cli import run_claude
+            self.last_usage = {}
+            return run_claude(user, model=model.split("/", 1)[1], system=system)
         from litellm import completion  # imported lazily: keeps tests offline
 
         response = completion(
-            model=self.model_for(agent),
+            model=model,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},

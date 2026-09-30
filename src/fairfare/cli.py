@@ -16,7 +16,7 @@ from fairfare.llm import LiteLLMClient, TracedLLM
 from fairfare.models import TripBrief
 from fairfare.pack import html_to_pdf
 from fairfare.planning.graph import run_plan
-from fairfare.tools.fetch import CachedFetcher, HttpFetcher
+from fairfare.tools.fetch import default_fetcher
 from fairfare.tools.search import get_search
 
 
@@ -29,7 +29,7 @@ def _print_issues(issues: list[dict[str, str]]) -> None:
 
 def cmd_audit(args: argparse.Namespace) -> None:
     brief = TripBrief(destination=args.destination, start=args.start, end=args.end)
-    live = (get_search(), CachedFetcher(HttpFetcher())) if args.live else (None, None)
+    live = (get_search(), default_fetcher()) if args.live else (None, None)
     result = run_audit(LiteLLMClient(), brief, args.quote.read_text(), load_reference_prices(), load_closures(),
                        search=live[0], fetcher=live[1], quote_file=str(args.quote), live=args.live)
     print(result["report"])
@@ -38,7 +38,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
 
 def cmd_plan(args: argparse.Namespace) -> None:
     brief = TripBrief(**json.loads(args.brief.read_text()))
-    result = run_plan(LiteLLMClient(), get_search(), CachedFetcher(HttpFetcher()), brief,
+    result = run_plan(LiteLLMClient(), get_search(), default_fetcher(), brief,
                       static_notices=load_closures())
     out = Path(args.out) / result["run_id"]
     out.mkdir(parents=True, exist_ok=True)

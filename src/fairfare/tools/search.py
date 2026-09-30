@@ -71,4 +71,7 @@ def get_search() -> SearchProvider:
     provider = os.getenv("FAIRFARE_SEARCH", "").lower()
     if provider == "tavily" or (not provider and os.getenv("TAVILY_API_KEY")):
         return TavilySearch()
+    if provider in ("claude-cli", "claude"):
+        from fairfare.claude_cli import ClaudeCLISearch
+        return ClaudeCLISearch()
     return DDGSearch()

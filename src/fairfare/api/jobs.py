@@ -9,7 +9,7 @@ from typing import Any, Callable
 class JobStore:
     """Runs long pipelines in a thread pool; clients poll /jobs/{id}."""
 
-    def __init__(self, workers: int = 2, keep: int = 200) -> None:
+    def __init__(self, workers: int = int(__import__('os').getenv('FAIRFARE_WORKERS', '2')), keep: int = 200) -> None:
         self.keep = keep
         self.pool = ThreadPoolExecutor(max_workers=workers)
         self.jobs: dict[str, dict[str, Any]] = {}

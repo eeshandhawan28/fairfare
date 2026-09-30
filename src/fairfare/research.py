@@ -90,6 +90,14 @@ class Researcher:
                 except Exception as exc:
                     tracing.event("search_failed", query=q, error=f"{type(exc).__name__}: {exc}")
                     continue
+                if getattr(self.search, "digest_mode", False) and results:
+                    # direct page fetch is unavailable: the search digest is the evidence, extracted once per query
+                    digest = getattr(self.search, "last_digest", "")
+                    if digest and digest not in seen_urls:
+                        seen_urls.add(digest)
+                        stats["pages"] += 1
+                        claims.extend(self._extract(system, results[0].url, digest, "search_digest", kind, stats))
+                    continue
                 for r in results[: self.pages_per_query]:
                     if r.url in seen_urls:
                         continue

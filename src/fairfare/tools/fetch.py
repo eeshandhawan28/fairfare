@@ -180,3 +180,12 @@ class FixtureFetcher:
                 raise RuntimeError(f"fixture has no page for {url}")
             rec["chars"] = len(self.pages[url])
             return Page(url=url, text=self.pages[url], retrieved_at="2026-09-30T00:00:00+00:00", method="fixture")
+
+
+def default_fetcher() -> "Fetcher":
+    """Cached HTTP fetcher; with FAIRFARE_SEARCH=claude-cli, falls back to Claude WebFetch when HTTP is blocked."""
+    inner: Fetcher = HttpFetcher()
+    if os.getenv("FAIRFARE_SEARCH", "").lower() in ("claude-cli", "claude"):
+        from fairfare.claude_cli import FallbackFetcher, SearchDigestFetcher
+        inner = FallbackFetcher(inner, SearchDigestFetcher())
+    return CachedFetcher(inner)

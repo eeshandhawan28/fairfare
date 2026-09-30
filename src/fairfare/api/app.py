@@ -22,7 +22,7 @@ from fairfare.llm import LLM, LiteLLMClient, TracedLLM
 from fairfare.models import TripBrief
 from fairfare.pack import html_to_pdf
 from fairfare.planning.graph import run_plan
-from fairfare.tools.fetch import CachedFetcher, Fetcher, HttpFetcher
+from fairfare.tools.fetch import Fetcher, default_fetcher
 from fairfare.tools.search import SearchProvider, get_search
 
 
@@ -36,7 +36,7 @@ class Deps:
 
     def live(self) -> tuple[SearchProvider, Fetcher]:
         self.search = self.search or get_search()
-        self.fetcher = self.fetcher or CachedFetcher(HttpFetcher())
+        self.fetcher = self.fetcher or default_fetcher()
         return self.search, self.fetcher
 
 
