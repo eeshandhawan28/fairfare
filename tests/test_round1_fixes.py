@@ -51,7 +51,7 @@ def test_day_trips_get_own_day_and_travel_time():
 
 def test_other_city_becomes_excursion_and_too_far_is_dropped():
     places = annotate_travel([P("Hanoi Museum", city="Hanoi"), P("Mai Chau", city="Mai Chau")], brief(destination="Hanoi"))
-    assert places[1].travel_min == 150 and places[1].travel_estimated
+    assert places[1].travel_min == 120 and places[1].travel_estimated
     assert "too far" in (eligible(P("Far", travel_min=600), brief()) or "")
 
 
@@ -118,3 +118,40 @@ def test_usage_limit_notice_is_fatal_not_data(monkeypatch):
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: R())
     with pytest.raises(claude_cli.LLMUnavailable):
         claude_cli.run_claude("hi")
+
+
+def test_hours_inferred_from_evidence_text():
+    from fairfare.planning.places import infer_hours
+    h = infer_hours("Open 9:30 a.m., closing at 4:30 p.m. October to March and 5:30 p.m. April to September. Closed on Mondays.")
+    assert h["closes"] == "16:30" and h["opens"] == "09:30" and h["closed_days"] == ["Monday"]
+
+
+def test_place_closing_before_slot_is_not_scheduled_late():
+    p = Place(name="Museum", city="Tokyo", closes="16:30", evidence=list(EV))
+    plan = Planner(brief(destination="Tokyo", pace="relaxed"), [p], []).plan()
+    for d in plan.days:
+        for b in d.blocks:
+            if b.title == "Museum":
+                assert b.end <= "16:30"
+
+
+def test_seasonal_food_filtered():
+    from fairfare.agents.destination import seasonal_ok
+    assert seasonal_ok("Sardines are a summer staple during the June festival", 10) is False
+    assert seasonal_ok("Chestnuts are sold in autumn", 10) is True
+    assert seasonal_ok("Pastel de nata is eaten all year", 10) is True
+
+
+def test_aggregate_quote_lines_not_compared_to_single_item_band():
+    ref = ReferencePrice(category="other", keywords=["meals"], low=160, high=399, source="s", as_of="x")
+    line = QuoteLine(item="Meals for 4 nights, 4 people", category="other", amount=42000)
+    f = check_prices([line], [ref])
+    assert f[0].severity == "info" and "itemise" in f[0].message
+
+
+def test_departure_day_has_no_fixed_activity_and_early_dinner_for_kids():
+    b = brief(destination="Lisbon", travellers=[Traveller(name="k", age=3), Traveller(name="p", age=35)])
+    plan = Planner(b, [P(f"Sight{i}", city="Lisbon") for i in range(6)], []).plan()
+    assert not [x for x in plan.days[-1].blocks if x.kind == "activity"]
+    dinners = [x for d in plan.days for x in d.blocks if x.title == "Dinner"]
+    assert dinners and all(x.start == "18:00" for x in dinners)

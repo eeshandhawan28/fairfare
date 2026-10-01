@@ -1,6 +1,8 @@
 """Deterministic price audit: compare each quote line to independently sourced bands."""
 from __future__ import annotations
 
+import re
+
 from fairfare.models import Finding, QuoteLine, ReferencePrice
 
 TOLERANCE = 0.15  # allow 15% above the top of the band before warning
@@ -16,6 +18,14 @@ def _match(line: QuoteLine, refs: list[ReferencePrice], destination: str = "") -
     return None
 
 
+AGGREGATE_RE = re.compile(r"\b(meals?|food|dining|restaurants?|breakfasts?|lunch(es)?|dinners?|street food)\b|"
+                          r"\b\d+\s*(nights?|days?)\b|\b(all|daily|every)\b", re.I)
+
+
+def _is_aggregate(line: QuoteLine) -> bool:
+    return line.category in ("other", "activity") and bool(AGGREGATE_RE.search(f"{line.item} {line.note}"))
+
+
 def check_prices(lines: list[QuoteLine], refs: list[ReferencePrice], travellers: int = 1,
                  nights: int = 1, destination: str = "") -> list[Finding]:
     findings: list[Finding] = []
@@ -26,6 +36,12 @@ def check_prices(lines: list[QuoteLine], refs: list[ReferencePrice], travellers:
                         message="Quote gives no readable amount for this line; ask the agent for it.",
                         confidence="high")
             )
+            continue
+        if _is_aggregate(line):
+            findings.append(Finding(
+                severity="info", kind="price", line=line.item, confidence="low",
+                message="This line bundles many items (several meals, days or nights), so it cannot be compared "
+                        "with a single-item price. Ask the agent to itemise it, then compare per meal or per day."))
             continue
         ref = _match(line, refs, destination)
         if ref is None:

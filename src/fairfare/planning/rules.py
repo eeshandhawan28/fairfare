@@ -16,6 +16,26 @@ PACE_MAX_ACTIVITIES = {"relaxed": 2, "balanced": 3, "packed": 4}
 ARRIVAL_DEPARTURE_FACTOR = 0.3
 
 
+def max_one_way_min(brief: TripBrief) -> int:
+    """Longest one-way day-trip drive this group should be sent on."""
+    if needs_long_rest(brief):
+        return 120
+    return 150 if brief.pace == "relaxed" else 240
+
+
+def wants_early_evening(brief: TripBrief) -> bool:
+    return any(t.age < 8 for t in brief.travellers) or any("late" in a.lower() for a in brief.avoid)
+
+
+def dinner_window(brief: TripBrief) -> tuple[int, int]:
+    return (18 * 60, 19 * 60) if wants_early_evening(brief) else DINNER
+
+
+def day_end(brief: TripBrief) -> int:
+    """Last minute an activity may end: an hour before dinner."""
+    return dinner_window(brief)[0] - 60
+
+
 def hm(minutes: int) -> str:
     return f"{minutes // 60:02d}:{minutes % 60:02d}"
 
@@ -70,7 +90,12 @@ def altitude_sensitive(brief: TripBrief) -> bool:
 
 
 def rest_window(brief: TripBrief) -> tuple[int, int]:
-    return (14 * 60, 16 * 60) if needs_long_rest(brief) else (14 * 60, 14 * 60 + 30)
+    older = any(t.age >= 50 or t.mobility == "limited" for t in brief.travellers)
+    if older:
+        return (14 * 60, 16 * 60)
+    if needs_long_rest(brief):  # a small child's nap: shorter, so the afternoon is still usable
+        return (13 * 60 + 30, 15 * 60)
+    return (14 * 60, 14 * 60 + 30)
 
 
 def trip_days(brief: TripBrief) -> list[date]:

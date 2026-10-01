@@ -11,9 +11,9 @@ from fairfare.models import Place, TripBrief
 GENERIC = {"temple", "shrine", "area", "complex", "site", "the", "of", "and", "de", "la", "el", "old"}
 MARKET_WORDS = ("market", "bazaar", "souk", "souq", "street", "district", "quarter", "night market", "food hall")
 FOOD_NAME = re.compile(r"\b(cuisine|street food|food tour|dish|dishes|specialit(y|ies)|cooking class|tasting)\b", re.I)
-DEFAULT_EXCURSION_MIN = 150
-MIN_EXCURSION_VISIT_MIN = 180
-MAX_ONE_WAY_MIN = 240
+DEFAULT_EXCURSION_MIN = 120
+MIN_EXCURSION_VISIT_MIN = 270
+MAX_ONE_WAY_MIN = 240  # hard cap; stricter caps apply for relaxed or older groups (see rules)
 
 
 def canon(name: str) -> str:
@@ -96,6 +96,29 @@ def llm_merge_aliases(llm: LLM, places: list[Place]) -> list[Place]:
     return [p for p in places if p.name not in dropped]
 
 
+_T = r"(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?"
+_CLOSES = re.compile(r"clos\w*\s+(?:at\s+|by\s+)?" + _T, re.I)
+_OPENS = re.compile(r"open\w*\s+(?:at\s+|from\s+|daily\s+from\s+)?" + _T, re.I)
+_DAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+
+
+def _to_hhmm(h: str, m: str | None, ap: str) -> str:
+    hour = int(h) % 12 + (12 if ap.lower() == "p" else 0)
+    return f"{hour:02d}:{int(m or 0):02d}"
+
+
+def infer_hours(text: str) -> dict:
+    """Opening/closing times and closed weekdays stated in a place's own evidence.
+
+    Seasonal statements list several times; the earliest closing and latest opening are kept, so the
+    schedule errs towards not arriving after closing.
+    """
+    closes = sorted(_to_hhmm(*m.groups()) for m in _CLOSES.finditer(text))
+    opens = sorted(_to_hhmm(*m.groups()) for m in _OPENS.finditer(text))
+    days = [d.capitalize() for d in _DAYS if re.search(rf"closed (?:on )?(?:[a-z, ]*and )?{d}s?\b|{d}s? (?:are )?closed", text, re.I)]
+    return {"opens": opens[-1] if opens else "", "closes": closes[0] if closes else "", "closed_days": days}
+
+
 def is_food_item(p: Place) -> bool:
     """Dishes, cuisines and food categories are 'things to eat', never scheduled as places."""
     name = p.name.lower()
@@ -123,6 +146,10 @@ def annotate_travel(places: list[Place], brief: TripBrief) -> list[Place]:
     out = []
     for p in places:
         p = p.model_copy(deep=True)
+        if not (p.opens and p.closes):
+            h = infer_hours(" ".join(e.quote for e in p.evidence) + " " + p.notes)
+            p.opens, p.closes = p.opens or h["opens"], p.closes or h["closes"]
+            p.closed_days = p.closed_days or h["closed_days"]
         city = p.city.strip().lower()
         if p.travel_min is None and bases and city and city not in bases:
             p.travel_min, p.travel_estimated = DEFAULT_EXCURSION_MIN, True

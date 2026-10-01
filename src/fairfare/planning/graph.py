@@ -15,7 +15,7 @@ from fairfare import tracing
 from fairfare.agents.closure_scout import scout_closures
 from fairfare.agents.hours_scout import scout_hours
 from fairfare.agents.destination import (research_contacts, research_costs, research_food, research_local_intel,
-                                         research_places, research_stay, research_transport, research_visa)
+                                         research_places, research_practical, research_stay, research_transport, research_visa)
 from fairfare.graph import _traced
 from fairfare.llm import LLM, TracedLLM
 from fairfare.models import Claim, ClosureNotice, Place, TripBrief, TripPlan
@@ -44,6 +44,7 @@ class PlanState(TypedDict, total=False):
     stay: list[Claim]
     food: list[Claim]
     contacts: list[Claim]
+    practical: list[Claim]
     plan: TripPlan
     violations: list[Violation]
     markdown: str
@@ -74,13 +75,14 @@ def build_plan_graph(researcher: Researcher, static_notices: list[ClosureNotice]
             gems, avoid = research_local_intel(researcher, brief)
             return base, gems, avoid
 
-        (base, gems, avoid), visa, transport, costs, stay, food, contacts = parallel(
+        (base, gems, avoid), visa, transport, costs, stay, food, contacts, practical = parallel(
             places_and_intel, lambda: research_visa(researcher, brief), lambda: research_transport(researcher, brief),
             lambda: research_costs(researcher, brief), lambda: research_stay(researcher, brief),
-            lambda: research_food(researcher, brief), lambda: research_contacts(researcher, brief), workers=7)
+            lambda: research_food(researcher, brief), lambda: research_contacts(researcher, brief),
+            lambda: research_practical(researcher, brief), workers=8)
         places = llm_merge_aliases(researcher.llm, _merge_places(base, gems))
         return {"places": places, "avoid": avoid, "visa": visa, "transport": transport, "costs": costs,
-                "stay": stay, "food": food, "contacts": contacts}
+                "stay": stay, "food": food, "contacts": contacts, "practical": practical}
 
     def closures_node(s: PlanState) -> PlanState:
         brief = s["brief"]
@@ -109,6 +111,7 @@ def build_plan_graph(researcher: Researcher, static_notices: list[ClosureNotice]
                                  "Check search access and the model in the trace.")
         plan.visa, plan.transport, plan.avoid = s["visa"], s["transport"], s["avoid"]
         plan.costs, plan.stay, plan.food, plan.contacts = s["costs"], s["stay"], s["food"], s["contacts"]
+        plan.practical = s.get("practical", [])
         tr = tracing.current()
         plan.run_id = tr.run_id if tr else ""
         return {"plan": plan, "violations": violations}

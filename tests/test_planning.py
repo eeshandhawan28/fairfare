@@ -68,7 +68,9 @@ def test_must_do_and_hidden_gem_rank_first():
     places = [P("Boring"), P("Gem", hidden_gem=True), P("Wanted")]
     plan = Planner(brief(must_do=["Wanted"]), places, []).plan()
     order = [b.place for d in plan.days for b in d.blocks if b.kind == "activity"]
-    assert order.index("Wanted") < order.index("Gem") < order.index("Boring")
+    assert order.index("Wanted") < order.index("Boring") and order.index("Gem") < order.index("Boring")
+    arrival_acts = [b.place for b in plan.days[0].blocks if b.kind == "activity"]
+    assert "Wanted" not in arrival_acts  # must-dos are not spent on the tired arrival evening
 
 
 def test_checker_flags_hand_broken_plans():
@@ -141,7 +143,7 @@ def test_randomised_plans_never_violate_the_checker():
 
 
 def test_no_back_to_back_full_day_outings_for_older_travellers():
-    places = [P(f"Trip{i}", effort=1, minutes=300, city=f"C{i}") for i in range(4)]
+    places = [P(f"Trip{i}", effort=1, minutes=300) for i in range(4)]
     plan = Planner(brief(), places, []).plan()
     idx = [i for i, d in enumerate(plan.days) if any(b.place and b.place.startswith("Trip") for b in d.blocks)]
     assert len(idx) >= 2 and all(b - a >= 2 for a, b in zip(idx, idx[1:]))

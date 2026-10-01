@@ -26,8 +26,9 @@ PLACES_INSTR = (
     "markets, districts, day-trip destinations. subject = the place's own proper name. Do NOT output dishes, cuisines, "
     "food categories, tour operators or hotels as places (a dish must have kind 'food'). "
     "For each, fill data only with what the page states; omit fields it does not state. "
-    "city = the city or town the place is in. from_center_min = one-way travel minutes from the main city centre, "
-    "only if stated. best_time = 'sunrise' only if the page says it must be done at sunrise/dawn. "
+    "city = the city, town or village the place is physically located in (NOT the nearest big city: Kaindy Lake "
+    "is in the Kolsai/Saty area, not Almaty). from_center_min = one-way travel minutes by road from the main city "
+    "centre; REQUIRED for any place outside the main city, only if the page states a time or distance. best_time = 'sunrise' only if the page says it must be done at sunrise/dawn. "
     "opens/closes = daily opening and closing time as HH:MM 24h, only if stated. Quote the sentence that supports it."
 )
 PLACES_SCHEMA = ('"city": "string", "kind": "sight|nature|food|market|culture|adventure|wellness", '
@@ -162,7 +163,7 @@ VISA_SCHEMA = '"requirement": "visa_free|evisa|visa_required|unclear", "days": n
 
 
 def research_visa(r: Researcher, brief: TripBrief) -> list[Claim]:
-    q = [f"{brief.destination} visa requirements for {brief.passport} citizens official",
+    q = [f"{brief.destination} visa requirements for {brief.passport} citizens official government e-visa portal",
          f"{brief.destination} entry rules {brief.passport} passport {brief.start.year}"]
     claims = r.run(q, "visa", VISA_INSTR.format(passport=brief.passport, destination=brief.destination), VISA_SCHEMA)
     for c in claims:
@@ -184,6 +185,8 @@ def research_transport(r: Researcher, brief: TripBrief) -> list[Claim]:
     d = brief.destination
     q = [f"{d} taxi apps tourists ride hailing", f"{d} airport to city centre transport options",
          f"{d} car rental with driver tourists"]
+    if " and " in d.split(",")[0].lower():  # multi-city trip: how to get between the cities
+        q.insert(1, f"{d.split(',')[0]} train between cities travel time")
     if getattr(r.search, "digest_mode", False):
         q = q[:2]
     claims = r.run(q, "transport", TRANSPORT_INSTR.format(destination=d), TRANSPORT_SCHEMA)
@@ -248,7 +251,8 @@ STAY_SCHEMA = '"type": "hotel|hostel|neighbourhood", "area": "string", "price_no
 
 def research_stay(r: Researcher, brief: TripBrief) -> list[Claim]:
     who = "families" if len(brief.travellers) > 2 else "couples" if len(brief.travellers) == 2 else "solo travellers"
-    q = [f"best area to stay in {brief.destination} for {who} {brief.budget_tier} hotels"]
+    extra = " ".join(i for i in brief.interests if i.lower() in ("riad", "riads", "ryokan", "hostel", "boutique"))
+    q = [f"best area and hotels to stay in {brief.destination} for {who} {brief.budget_tier} {extra} price per night".replace("  ", " ")]
     claims = r.run(q, "stay", STAY_INSTR.format(who=who, destination=brief.destination, tier=brief.budget_tier), STAY_SCHEMA)
     return tidy(claims, limit=6)
 
@@ -269,7 +273,8 @@ def research_food(r: Researcher, brief: TripBrief) -> list[Claim]:
     if diet:
         q.append(f"{brief.destination} {diet[0]} friendly restaurants")
     claims = r.run(q, "food", FOOD_INSTR.format(destination=brief.destination, diet=extra), FOOD_SCHEMA)
-    return tidy(claims, limit=10)
+    claims = [c for c in claims if seasonal_ok(c.evidence.quote + " " + c.text, brief.start.month)]
+    return tidy(claims, limit=12)
 
 
 # ---------- emergency and local contacts ----------
@@ -290,3 +295,41 @@ def research_contacts(r: Researcher, brief: TripBrief) -> list[Claim]:
         if phone and _norm_digits(phone) not in _norm_digits(c.evidence.quote):
             c.data["phone"] = ""
     return tidy(claims, limit=6)
+
+
+# ---------- seasonality ----------
+
+MONTHS = ("january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
+          "november", "december")
+SEASON_MONTHS = {"spring": (3, 4, 5), "summer": (6, 7, 8), "autumn": (9, 10, 11), "fall": (9, 10, 11),
+                 "winter": (12, 1, 2)}
+
+
+def seasonal_ok(text: str, month: int) -> bool:
+    """False when the text ties something to months or seasons that do not include the trip month."""
+    t = text.lower()
+    named = [i + 1 for i, m in enumerate(MONTHS) if re.search(rf"\b{m}\b", t) and m != "may"] + \
+        ([5] if re.search(r"\bin may\b|\bmay (to|through|-)|\bfrom may\b", t) else [])
+    seasons = [s for s in SEASON_MONTHS if re.search(rf"\b{s}\b", t)]
+    if named and month not in named and not any(abs(month - n) <= 1 or abs(month - n) == 11 for n in named):
+        return False
+    if seasons and not named and not any(month in SEASON_MONTHS[s] for s in seasons):
+        return False
+    return True
+
+
+# ---------- practical (money, SIM, tipping) ----------
+
+PRACTICAL_INSTR = (
+    "Extract practical facts for a visitor to {destination}: mobile SIM/eSIM options and where to buy them, "
+    "currency and how to get cash (ATMs, cards accepted), tipping customs, plug type and voltage, and whether tap "
+    "water is safe. subject = the topic (e.g. 'SIM card', 'Tipping')."
+)
+PRACTICAL_SCHEMA = '"topic": "sim|money|tipping|plug|water|language|other"'
+
+
+def research_practical(r: Researcher, brief: TripBrief) -> list[Claim]:
+    d = brief.destination
+    q = [f"{d} tourist practical tips SIM card currency ATM tipping plug"]
+    claims = r.run(q, "practical", PRACTICAL_INSTR.format(destination=d), PRACTICAL_SCHEMA)
+    return tidy(claims, limit=8)

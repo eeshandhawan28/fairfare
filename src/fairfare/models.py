@@ -190,6 +190,7 @@ class TripPlan(BaseModel):
     stay: list[Claim] = Field(default_factory=list)
     food: list[Claim] = Field(default_factory=list)
     contacts: list[Claim] = Field(default_factory=list)
+    practical: list[Claim] = Field(default_factory=list)
     closures: list[ClosureNotice] = Field(default_factory=list)
     places: list[Place] = Field(default_factory=list)
     run_id: str = ""
