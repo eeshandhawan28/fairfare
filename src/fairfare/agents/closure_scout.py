@@ -81,7 +81,7 @@ def scout_closures(researcher: Researcher, venues: list[str], brief: TripBrief) 
             if c.evidence.retrieved_at == "search_digest":
                 confidence = "low"  # a model-written search digest is never operator-grade evidence
             notices.append(ClosureNotice(
-                venue=venue, keywords=[venue.lower()] + _slug(venue)[:1], closed_from=start, closed_to=end,
+                venue=venue, keywords=_keywords(venue), closed_from=start, closed_to=end,
                 reason=str(get(c.data, "reason", "")), confidence=confidence,
                 source=f'{c.evidence.url} ("{c.evidence.quote[:120]}") retrieved {c.evidence.retrieved_at}'))
         return notices
@@ -102,3 +102,11 @@ def _dedupe(notices: list[ClosureNotice]) -> list[ClosureNotice]:
         if key not in best or score(n) > score(best[key]):
             best[key] = n
     return list(best.values())
+
+
+def _keywords(venue: str) -> list[str]:
+    """Match the venue name and each part of a combined name ("Medeu and Shymbulak")."""
+    import re
+    v = venue.lower()
+    parts = [p.strip() for p in re.split(r"\band\b|&|/|,", v) if len(p.strip()) >= 4]
+    return list(dict.fromkeys([v] + parts + _slug(venue)[:1]))

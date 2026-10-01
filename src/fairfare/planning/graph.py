@@ -15,13 +15,13 @@ from fairfare import tracing
 from fairfare.agents.closure_scout import scout_closures
 from fairfare.agents.hours_scout import scout_hours
 from fairfare.agents.destination import (research_contacts, research_costs, research_food, research_local_intel,
-                                         research_places, research_practical, research_stay, research_transport, research_visa)
+                                         research_places, research_access, research_practical, research_stay, research_transport, research_visa)
 from fairfare.graph import _traced
 from fairfare.llm import LLM, TracedLLM
 from fairfare.models import Claim, ClosureNotice, Place, TripBrief, TripPlan
 from fairfare.pack import render_html, render_markdown, render_whatsapp
 from fairfare.planning.checker import Violation, plan_with_repair
-from fairfare.planning.places import llm_merge_aliases, merge_similar
+from fairfare.planning.places import apply_access, llm_merge_aliases, merge_similar
 from fairfare.planning.scheduler import _rank, eligible
 from fairfare.research import Researcher
 from fairfare.tools.fetch import Fetcher
@@ -75,12 +75,13 @@ def build_plan_graph(researcher: Researcher, static_notices: list[ClosureNotice]
             gems, avoid = research_local_intel(researcher, brief)
             return base, gems, avoid
 
-        (base, gems, avoid), visa, transport, costs, stay, food, contacts, practical = parallel(
+        (base, gems, avoid), visa, transport, costs, stay, food, contacts, practical, access = parallel(
             places_and_intel, lambda: research_visa(researcher, brief), lambda: research_transport(researcher, brief),
             lambda: research_costs(researcher, brief), lambda: research_stay(researcher, brief),
             lambda: research_food(researcher, brief), lambda: research_contacts(researcher, brief),
-            lambda: research_practical(researcher, brief), workers=8)
+            lambda: research_practical(researcher, brief), lambda: research_access(researcher, brief), workers=9)
         places = llm_merge_aliases(researcher.llm, _merge_places(base, gems))
+        places = apply_access(places, access)
         return {"places": places, "avoid": avoid, "visa": visa, "transport": transport, "costs": costs,
                 "stay": stay, "food": food, "contacts": contacts, "practical": practical}
 

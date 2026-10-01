@@ -19,10 +19,15 @@ def _match(line: QuoteLine, refs: list[ReferencePrice], destination: str = "") -
 
 
 AGGREGATE_RE = re.compile(r"\b(meals?|food|dining|restaurants?|breakfasts?|lunch(es)?|dinners?|street food)\b|"
-                          r"\b\d+\s*(nights?|days?)\b|\b(all|daily|every)\b", re.I)
+                          r"\b\d+\s*(nights?|days?)\b|\b(all|daily|every|per day)\b|\+|&|\bwith\b", re.I)
+
+
+MULTIDAY_RE = re.compile(r"\b(\d+\s*days?|daily|per day|each day|city tours?)\b", re.I)
 
 
 def _is_aggregate(line: QuoteLine) -> bool:
+    if MULTIDAY_RE.search(f"{line.item} {line.note}"):
+        return True
     return line.category in ("other", "activity") and bool(AGGREGATE_RE.search(f"{line.item} {line.note}"))
 
 

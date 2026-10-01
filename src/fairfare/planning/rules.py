@@ -28,7 +28,7 @@ def wants_early_evening(brief: TripBrief) -> bool:
 
 
 def dinner_window(brief: TripBrief) -> tuple[int, int]:
-    return (18 * 60, 19 * 60) if wants_early_evening(brief) else DINNER
+    return (18 * 60, 19 * 60 + 15) if wants_early_evening(brief) else DINNER
 
 
 def day_end(brief: TripBrief) -> int:
@@ -72,6 +72,13 @@ def is_full_day(p: Place) -> bool:
 def excursion_hours(p: Place) -> float:
     """Door-to-door hours: travel both ways plus the visit."""
     return (2 * (p.travel_min or 0) + p.duration_min) / 60
+
+
+def max_excursion_hours(brief: TripBrief) -> float:
+    """Longest door-to-door day trip this group should be asked to do."""
+    if min((t.age for t in brief.travellers), default=99) < 6 or needs_long_rest(brief):
+        return 6.5
+    return 10.0
 
 
 def place_cost(p: Place) -> int:

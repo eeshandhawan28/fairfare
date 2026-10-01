@@ -113,15 +113,19 @@ def render_markdown(plan: TripPlan, audit_report: Optional[str] = None) -> str:
     ideas = [c.subject for c in plan.food if str(c.data.get("kind", "")).lower() in ("restaurant", "market")] or \
         [f"try {c.subject}" for c in plan.food]
     stay = plan.stay[0].subject if plan.stay else ""
-    n_meal = 0
+    used_ideas: set[str] = set()
     for i, d in enumerate(plan.days, 1):
         out.append(f"### Day {i}: {d.day.strftime('%A %d %B')} ({d.role} day, {load_label(d.load, d.cap)} load)")
         for blk in d.blocks:
             src = f" {_srcs(blk.sources)}" if blk.sources else ""
             extra = ""
             if blk.kind == "meal" and ideas:
-                extra = f" Ideas: {ideas[n_meal % len(ideas)]}" + (f" or {ideas[(n_meal + 1) % len(ideas)]}" if len(ideas) > 1 else "") + " (see Where to eat / Dishes to try)."
-                n_meal += 2
+                today = " ".join(b.title.lower() for b in d.blocks if b.kind == "activity")
+                fresh = [x for x in ideas if x not in used_ideas and x.lower() not in today] or \
+                    [x for x in ideas if x.lower() not in today] or ideas
+                pick = fresh[:2]
+                used_ideas.update(pick)
+                extra = " Ideas: " + " or ".join(pick) + " (see Where to eat / Dishes to try)."
             if blk.kind == "arrival" and stay:
                 extra = f" Suggested area or stay: {stay} (see Where to stay)."
             note = f" {blk.notes}{extra}" if blk.notes else extra

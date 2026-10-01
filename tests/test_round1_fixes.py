@@ -155,3 +155,32 @@ def test_departure_day_has_no_fixed_activity_and_early_dinner_for_kids():
     assert not [x for x in plan.days[-1].blocks if x.kind == "activity"]
     dinners = [x for d in plan.days for x in d.blocks if x.title == "Dinner"]
     assert dinners and all(x.start == "18:00" for x in dinners)
+
+
+def test_round3_hikes_crowds_and_access():
+    from fairfare.planning.places import apply_access
+    from fairfare.agents.closure_scout import _keywords
+    old = brief(travellers=[Traveller(name="m", age=70, mobility="limited")], avoid=["crowds"])
+    hike = Place(name="Mt. Nokogiri", evidence=[Evidence(url="https://x.test/a", quote="A hiking destination with a jagged cliff lookout", retrieved_at="2026-09-30")])
+    assert "hard walking" in (eligible(hike, old) or "")
+    busy = Place(name="Senso-ji", evidence=[Evidence(url="https://x.test/a", quote="Attracts about 30 million annual visitors each year", retrieved_at="2026-09-30")])
+    assert "crowded" in (eligible(busy, old) or "")
+    chiado = P("Chiado")
+    claim = Claim(subject="Chiado", text="Chiado is steep with cobbled hills", evidence=EV[0], kind="access")
+    marked = apply_access([chiado, P("Belem Tower")], [claim])
+    assert "steep" in marked[0].notes and not marked[1].notes
+    assert eligible(marked[0], old) is not None
+    assert "medeu" in _keywords("Medeu and Shymbulak")
+
+
+def test_round3_desert_is_an_excursion_not_a_sunrise_slot():
+    p = annotate_travel([P("Agafay Desert", city="Marrakech", best_time="sunrise", travel_min=40), P("Bahia Palace", city="Marrakech")],
+                        brief(destination="Marrakech"))
+    assert p[0].travel_min == 60 and p[0].best_time == "" and p[0].duration_min >= 270
+    assert p[1].travel_min is None
+
+
+def test_round3_multiday_transport_is_not_compared_to_a_single_ride():
+    from fairfare.agents.price_check import _is_aggregate
+    assert _is_aggregate(QuoteLine(item="Local daily transport (Yandex Go, city tours)", category="transfer", amount=2500, currency="INR"))
+    assert _is_aggregate(QuoteLine(item="Majorelle entry + transfer", category="activity", amount=1, currency="INR"))

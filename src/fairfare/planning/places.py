@@ -11,6 +11,7 @@ from fairfare.models import Place, TripBrief
 GENERIC = {"temple", "shrine", "area", "complex", "site", "the", "of", "and", "de", "la", "el", "old"}
 MARKET_WORDS = ("market", "bazaar", "souk", "souq", "street", "district", "quarter", "night market", "food hall")
 FOOD_NAME = re.compile(r"\b(cuisine|street food|food tour|dish|dishes|specialit(y|ies)|cooking class|tasting)\b", re.I)
+EXCURSION_WORDS = re.compile(r"\b(desert|mountains?|gorge|canyon|waterfalls?|national park|nature (park|reserve)|safari|ha long|halong)\b", re.I)
 DEFAULT_EXCURSION_MIN = 120
 MIN_EXCURSION_VISIT_MIN = 270
 MAX_ONE_WAY_MIN = 240  # hard cap; stricter caps apply for relaxed or older groups (see rules)
@@ -153,9 +154,30 @@ def annotate_travel(places: list[Place], brief: TripBrief) -> list[Place]:
         city = p.city.strip().lower()
         if p.travel_min is None and bases and city and city not in bases:
             p.travel_min, p.travel_estimated = DEFAULT_EXCURSION_MIN, True
+        wild = bool(EXCURSION_WORDS.search(f"{p.name} {p.kind}"))
+        if wild and (p.travel_min is None or p.travel_min < 60):
+            p.travel_min, p.travel_estimated = 60, p.travel_min is None  # outdoor sites are never a short hop
+            p.travel_min, p.travel_estimated = max(p.travel_min or 0, 60), p.travel_min is None  # outdoor sites are never a short hop
         if p.travel_min is not None and p.travel_min < 60:
             p.travel_min = None  # near enough to treat as part of the base city
+        if p.travel_min is not None and p.best_time == "sunrise":
+            p.best_time = ""  # a day trip cannot be squeezed into a sunrise slot
         if p.travel_min is not None:
             p.duration_min = max(p.duration_min, MIN_EXCURSION_VISIT_MIN)  # a day trip is worth a real visit
+        out.append(p)
+    return out
+
+
+def apply_access(places: list[Place], claims: list) -> list[Place]:
+    """Attach a verified steep/stairs/hiking quote to the places it names, so the scheduler can exclude them."""
+    if not claims:
+        return places
+    out = []
+    for p in places:
+        key = canon(p.name)
+        hit = next((c for c in claims if key and key in canon(f"{c.subject} {c.text}")
+                    and canon(c.subject) and (canon(c.subject) in key or key in canon(c.subject))), None)
+        if hit:
+            p = p.model_copy(update={"notes": f"{p.notes} Access: {hit.text}".strip()})
         out.append(p)
     return out

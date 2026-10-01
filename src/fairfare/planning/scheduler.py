@@ -1,6 +1,7 @@
 """Deterministic family-aware scheduler. Picks from *verified* places only."""
 from __future__ import annotations
 
+import re
 from datetime import date
 
 from fairfare.models import Block, ClosureNotice, DayPlan, Place, TripBrief, TripPlan
@@ -9,6 +10,8 @@ from fairfare.planning.places import MAX_ONE_WAY_MIN, annotate_travel, is_food_i
 
 STEEP_WORDS = ("steep", "stairs", "steps", "uphill", "climb", "strenuous", "demanding", "scramble", "hilltop",
                "highest point", "cobbled hill")
+HIKE_RE = re.compile(r"\b(hike|hikes|hiking|trek|treks|trekking|trail|trails|summit|ridge|peak|cliff)\b", re.I)
+MASS_VISITORS_RE = re.compile(r"\b\d+(\.\d+)?\s*million\s+(annual\s+|yearly\s+)?(visitors|tourists|people)\b|\bmillions of visitors\b", re.I)
 CROWD_WORDS = ("crowd", "busiest", "most visited", "most popular", "long queue", "packed with", "tourist hub")
 
 
@@ -33,17 +36,17 @@ def eligible(p: Place, brief: TripBrief) -> str | None:
         return "food item (listed under What to eat)"
     if p.travel_min is not None and p.travel_min > min(MAX_ONE_WAY_MIN, R.max_one_way_min(brief)):
         return f"too far for this group's day trip (about {p.travel_min / 60:.1f} h each way)"
-    if p.travel_min is not None and R.excursion_hours(p) > (R.dinner_window(brief)[0] / 60 - 8.5):
+    if p.travel_min is not None and R.excursion_hours(p) > min(R.dinner_window(brief)[0] / 60 - 8.5, R.max_excursion_hours(brief)):
         return f"day trip would take {R.excursion_hours(p):.0f} h door to door"
     if any("crowd" in a.lower() for a in brief.avoid):
         text = " ".join(e.quote for e in p.evidence).lower() + " " + p.notes.lower()
-        if any(w in text for w in CROWD_WORDS):
+        if any(w in text for w in CROWD_WORDS) or MASS_VISITORS_RE.search(text):
             return "busy and crowded (on your avoid list)"
     limited = any(t.mobility == "limited" for t in brief.travellers)
     avoids_steep = any(k in a.lower() for a in brief.avoid for k in ("steep", "stairs", "hike", "hiking", "climb", "walking"))
     if limited or avoids_steep:
         text = " ".join(e.quote for e in p.evidence).lower() + " " + p.notes.lower()
-        if any(w in text for w in STEEP_WORDS):
+        if any(w in text for w in STEEP_WORDS) or HIKE_RE.search(f"{p.name} {p.kind} {text}"):
             return "steep, stairs or hard walking (mobility or avoid list)"
         if p.effort >= 3:
             return "strenuous (mobility or avoid list)"
@@ -151,9 +154,13 @@ class Planner:
                 f"[{n.confidence} confidence]. Confirm with the operator.")
         if self.checked is not None:
             scheduled = {b.place for d in out for b in d.blocks if b.kind == "activity" and b.place}
-            for name in sorted(scheduled):
-                if name.lower() not in self.checked:
-                    self.warnings.append(f"{name}: closures and season were not checked online. Confirm it is open on your dates.")
+            open_air = ("district", "quarter", "street", "area", "old town", "neighbourhood", "neighborhood", "square", "walk")
+            unchecked = [n for n in sorted(scheduled) if n.lower() not in self.checked
+                         and not any(w in n.lower() for w in open_air)]
+            if unchecked:
+                self.warnings.append("Closures and season not checked online for: " + ", ".join(unchecked) +
+                                     ". Confirm each is open on your dates.")
+        self.warnings.extend(self._uncovered_interests(out))
         empty = [d.day.strftime("%d %b") for d in out if d.role == "full" and not any(
             b.kind == "activity" for b in d.blocks)]
         if empty:
@@ -162,6 +169,26 @@ class Planner:
                 "place(s); add must-dos, loosen the pace, or re-run with more search coverage.")
         return TripPlan(brief=self.brief, days=out, warnings=sorted(set(self.warnings)), closures=self.notices,
                         places=[p for p in self.candidates])
+
+    def _uncovered_interests(self, days: list[DayPlan]) -> list[str]:
+        """Interests the schedule does not serve, said plainly instead of silently dropped."""
+        skip = {"food", "street food", "cuisine", "eating", "sights", "sightseeing", "culture", "easy sights"}
+        scheduled = {b.place for d in days for b in d.blocks if b.kind == "activity" and b.place}
+        text = " ".join(f"{p.name} {p.kind} {p.notes}" for p in self.candidates if p.name in scheduled).lower()
+        out = []
+        for i in self.brief.interests:
+            key = i.lower().strip()
+            if key in skip:
+                continue
+            toks = [t for t in re.findall(r"[a-z]{4,}", key) if t not in {"day", "trip", "trips", "sights", "local"}]
+            stem = lambda t: t[:-1] if t.endswith("s") else t
+            if key in text or any(stem(t) in text for t in toks):
+                continue
+            out.append(i)
+        if not out:
+            return []
+        return ["No verified place for your interest in " + ", ".join(out) +
+                " made it into the schedule. Ask your hotel or a local operator to arrange it, or add it as a must-do."]
 
     # ---- selection ----
 

@@ -333,3 +333,23 @@ def research_practical(r: Researcher, brief: TripBrief) -> list[Claim]:
     q = [f"{d} tourist practical tips SIM card currency ATM tipping plug"]
     claims = r.run(q, "practical", PRACTICAL_INSTR.format(destination=d), PRACTICAL_SCHEMA)
     return tidy(claims, limit=8)
+
+
+# ---------- access (steep, stairs, hard walking) ----------
+
+ACCESS_INSTR = (
+    "Extract places, neighbourhoods or attractions in {destination} that are steep, need many stairs or steps, involve "
+    "hiking or long uphill walking, or are hard for wheelchair users and people with limited mobility. subject = the "
+    "exact place or neighbourhood name as written; the quote must name it and the difficulty."
+)
+ACCESS_SCHEMA = '"difficulty": "steep|stairs|hiking|uneven|other"'
+
+
+def research_access(r: Researcher, brief: TripBrief) -> list[Claim]:
+    """Only needed when someone has limited mobility or the group avoids steep walks."""
+    avoids = any(k in a.lower() for a in brief.avoid for k in ("steep", "stairs", "hike", "hiking", "climb", "walking"))
+    if not (avoids or any(t.mobility == "limited" for t in brief.travellers)):
+        return []
+    d = brief.destination
+    q = [f"{d} steep hills stairs hard for elderly wheelchair accessible which attractions neighbourhoods to avoid"]
+    return tidy(r.run(q, "access", ACCESS_INSTR.format(destination=d), ACCESS_SCHEMA), limit=12)
