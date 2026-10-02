@@ -105,12 +105,18 @@ def research_places(r: Researcher, brief: TripBrief) -> list[Place]:
     who = "families with older parents" if any(t.age >= 60 for t in brief.travellers) else \
         "families with young children" if any(t.age < 12 for t in brief.travellers) else "visitors"
     interests = [i for i in brief.interests if i.lower() not in ("food", "street food", "eating")]
-    queries = [f"top things to do in {dest}", f"{dest} attractions {who}",
-               f"{dest} day trips from the city"] + [f"best {i} places in {dest}" for i in interests[:4]]
-    if getattr(r.search, "digest_mode", False):
-        queries = [queries[0], queries[1]] + queries[3:7] + [queries[2]]  # interests before generic day trips
-    claims = r.run(queries, "place", PLACES_INSTR.format(destination=dest), PLACES_SCHEMA)
-    places = merge_similar([claim_to_place(c) for c in claims])
+    general = [f"top things to do in {dest}", f"{dest} attractions {who}", f"{dest} day trips from the city"]
+    instr = PLACES_INSTR.format(destination=dest)
+    from fairfare.planning.graph import parallel
+    jobs = [lambda: ("", r.run(general, "place", instr, PLACES_SCHEMA))] + [
+        (lambda i=i: (i, r.run([f"best {i} places in {dest}"], "place", instr, PLACES_SCHEMA))) for i in interests[:4]]
+    places = []
+    for tag, claims in parallel(*jobs, workers=5):
+        for c in claims:
+            p = claim_to_place(c)
+            p.tags = [tag] if tag else []
+            places.append(p)
+    places = merge_similar(places)
     return llm_merge_aliases(r.llm, places)
 
 
@@ -270,12 +276,19 @@ FOOD_SCHEMA = '"kind": "dish|restaurant|market", "vegetarian": "yes|no|unknown",
 def research_food(r: Researcher, brief: TripBrief) -> list[Claim]:
     diet = brief.dietary or [i for i in brief.interests if "vegetarian" in i.lower() or "vegan" in i.lower()]
     extra = f"Note which are suitable for: {', '.join(diet)}." if diet else ""
-    q = [f"best local food to try in {brief.destination} restaurants street food"]
+    d = brief.destination
+    q = [f"best local food to try in {d} restaurants street food", f"{d} best restaurants for dinner locals recommend"]
+    if any(t.age < 12 for t in brief.travellers):
+        q.append(f"{d} family friendly restaurants with kids")
+    elif any(t.age >= 65 or t.mobility == "limited" for t in brief.travellers):
+        q.append(f"{d} quiet comfortable restaurants easy access step-free")
+    if any("trap" in a.lower() for a in brief.avoid):
+        q.append(f"{d} where locals eat not touristy restaurants")
     if diet:
         q.append(f"{brief.destination} {diet[0]} friendly restaurants")
     claims = r.run(q, "food", FOOD_INSTR.format(destination=brief.destination, diet=extra), FOOD_SCHEMA)
     claims = [c for c in claims if seasonal_ok(c.evidence.quote + " " + c.text, brief.start.month)]
-    return tidy(claims, limit=12)
+    return tidy(claims, limit=16)
 
 
 # ---------- emergency and local contacts ----------

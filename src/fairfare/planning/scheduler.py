@@ -7,7 +7,7 @@ from datetime import date
 
 from fairfare.models import Block, ClosureNotice, DayPlan, Place, TripBrief, TripPlan
 from fairfare.planning import rules as R
-from fairfare.planning.places import MAX_ONE_WAY_MIN, annotate_travel, is_food_item
+from fairfare.planning.places import MAX_ONE_WAY_MIN, canon, annotate_travel, is_food_item
 
 STEEP_WORDS = ("steep", "stairs", "steps", "uphill", "climb", "strenuous", "demanding", "scramble", "hilltop",
                "highest point", "cobbled hill")
@@ -17,18 +17,55 @@ MASS_VISITORS_RE = re.compile(r"\b\d+(\.\d+)?\s*million\s+(annual\s+|yearly\s+)?
 CROWD_WORDS = ("crowd", "busiest", "most visited", "most popular", "long queue", "packed with", "tourist hub")
 
 
+def _stems(text: str) -> set[str]:
+    def stem(w: str) -> str:
+        if w.endswith("ies"):
+            return w[:-3] + "y"
+        if w.endswith("es") and w[-3:-2] in ("c", "s", "x", "h"):
+            return w[:-2]
+        return w[:-1] if w.endswith("s") else w
+    return {stem(w) for w in re.findall(r"[a-z]{4,}", text.lower())
+            if w not in {"sights", "local", "trip", "trips", "easy", "quiet", "cultural", "culture", "places"}}
+
+
+def interest_hits(p: Place, brief: TripBrief) -> int:
+    """How many of the group's interests this place serves (stemmed words in name, kind, notes or its quotes)."""
+    have = _stems(f"{p.name} {p.kind} {p.notes} " + " ".join(e.quote for e in p.evidence))
+    tagged = {t.lower() for t in p.tags}
+    return sum(1 for i in brief.interests if i.lower() in tagged or _stems(i) & have)
+
+
 def _rank(p: Place, brief: TripBrief) -> tuple:
     name = p.name.lower()
     must = any(m.lower() in name for m in brief.must_do)
-    interest = any(i.lower() in p.kind.lower() or i.lower() in name or i.lower() in p.notes.lower()
-                   for i in brief.interests)
-    return (0 if must else 1 if p.hidden_gem else 2 if interest else 3, -len(p.evidence), p.effort, name)
+    hits = interest_hits(p, brief)
+    return (0 if must else 1 if hits else 2 if p.hidden_gem else 3, -hits, -len(p.evidence), p.effort, name)
+
+
+SUMMER_ONLY = re.compile(r"\b(water ?park|aqua ?park|waterpark|lido|open-air pool)\b", re.I)
+WINTER_ONLY = re.compile(r"\b(ice rink|skating|ski resort|ski slope|skiing)\b", re.I)
+
+
+def out_of_season(p: Place, brief: TripBrief) -> str | None:
+    """Venue types that only run in one season (northern hemisphere), checked against the trip month."""
+    m = brief.start.month
+    text = f"{p.name} {p.kind}"
+    if SUMMER_ONLY.search(text) and m not in (5, 6, 7, 8, 9):
+        return "summer-only venue (outside its season on your dates)"
+    if WINTER_ONLY.search(text) and m not in (12, 1, 2, 3):
+        return "winter-only venue (outside its season on your dates)"
+    return None
 
 
 def eligible(p: Place, brief: TripBrief) -> str | None:
     """Reason a place can never be scheduled for this family, else None."""
     if not p.evidence:
         return "no verified source"
+    if canon(p.name) and canon(p.name) in {canon(part) for part in re.split(r"[,/]| and ", brief.destination)}:
+        return "a whole city, not a single place"
+    seasonal = out_of_season(p, brief)
+    if seasonal:
+        return seasonal
     if any(a.lower() in p.name.lower() or a.lower() == p.kind.lower() for a in brief.avoid):
         return "on your avoid list"
     youngest = min((t.age for t in brief.travellers), default=99)
@@ -182,7 +219,7 @@ class Planner:
         """Interests the schedule does not serve, said plainly instead of silently dropped."""
         skip = {"food", "street food", "cuisine", "eating", "sights", "sightseeing", "culture", "easy sights"}
         scheduled = {b.place for d in days for b in d.blocks if b.kind == "activity" and b.place}
-        text = " ".join(f"{p.name} {p.kind} {p.notes}" for p in self.candidates if p.name in scheduled).lower()
+        text = " ".join(f"{p.name} {p.kind} {p.notes} {' '.join(p.tags)}" for p in self.candidates if p.name in scheduled).lower()
         out = []
         for i in self.brief.interests:
             key = i.lower().strip()
@@ -190,7 +227,7 @@ class Planner:
                 continue
             toks = [t for t in re.findall(r"[a-z]{4,}", key) if t not in {"day", "trip", "trips", "sights", "local"}]
             stem = lambda t: t[:-1] if t.endswith("s") else t
-            if key in text or any(stem(t) in text for t in toks):
+            if key in text or any(stem(t) in text for t in toks) or _stems(i) & _stems(text):
                 continue
             out.append(i)
         if not out:

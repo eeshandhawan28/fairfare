@@ -184,3 +184,14 @@ def test_round3_multiday_transport_is_not_compared_to_a_single_ride():
     from fairfare.agents.price_check import _is_aggregate
     assert _is_aggregate(QuoteLine(item="Local daily transport (Yandex Go, city tours)", category="transfer", amount=2500, currency="INR"))
     assert _is_aggregate(QuoteLine(item="Majorelle entry + transfer", category="activity", amount=1, currency="INR"))
+
+
+def test_round5_interest_tags_season_and_city_names():
+    from fairfare.planning.scheduler import interest_hits
+    b = brief(destination="Lisbon, Portugal", interests=["beaches", "trams"], start=date(2026, 10, 24), end=date(2026, 10, 29))
+    beach = Place(name="Praia de Carcavelos", kind="nature", tags=["beaches"], evidence=list(EV))
+    assert interest_hits(beach, b) == 1
+    assert interest_hits(Place(name="Tram 28", evidence=list(EV)), b) == 1
+    assert "season" in (eligible(P("Aqua Park Almaty"), brief(start=date(2026, 11, 9), end=date(2026, 11, 14))) or "")
+    assert "whole city" in (eligible(P("Lisbon"), b) or "")
+    assert annotate_travel([P("Universal Studios Japan", city="Osaka")], brief(destination="Osaka"))[0].duration_min >= 300

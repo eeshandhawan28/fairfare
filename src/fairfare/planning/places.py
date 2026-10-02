@@ -12,6 +12,7 @@ GENERIC = {"temple", "shrine", "area", "complex", "site", "the", "of", "and", "d
 MARKET_WORDS = ("market", "bazaar", "souk", "souq", "street", "district", "quarter", "night market", "food hall")
 FOOD_NAME = re.compile(r"\b(cuisine|street food|food tour|dish|dishes|specialit(y|ies)|cooking class|tasting)\b", re.I)
 EXCURSION_WORDS = re.compile(r"\b(desert|mountains?|gorge|canyon|waterfalls?|national park|nature (park|reserve)|safari|ha long|halong)\b", re.I)
+THEME_RE = re.compile(r"\b(universal studios|disney\w*|theme park|legoland|safari park)\b", re.I)
 DEFAULT_EXCURSION_MIN = 120
 MIN_EXCURSION_VISIT_MIN = 270
 MAX_ONE_WAY_MIN = 240  # hard cap; stricter caps apply for relaxed or older groups (see rules)
@@ -39,6 +40,7 @@ def _same(a: str, b: str) -> bool:
 def _merge_into(keep: Place, other: Place) -> None:
     keep.evidence.extend(e for e in other.evidence if e not in keep.evidence)
     keep.hidden_gem = keep.hidden_gem or other.hidden_gem
+    keep.tags = list(dict.fromkeys(keep.tags + other.tags))
     if other.travel_min is not None:
         keep.travel_min = max(keep.travel_min or 0, other.travel_min)
     keep.city = keep.city or other.city
@@ -154,6 +156,10 @@ def annotate_travel(places: list[Place], brief: TripBrief) -> list[Place]:
         city = p.city.strip().lower()
         if p.travel_min is None and bases and city and city not in bases:
             p.travel_min, p.travel_estimated = DEFAULT_EXCURSION_MIN, True
+        elif p.travel_min is None and bases and not city:
+            seen = (p.name + " " + " ".join(e.quote for e in p.evidence)).lower()
+            if not any(b in seen for b in bases):  # nothing ties it to the base city: do not assume it is next door
+                p.travel_min, p.travel_estimated = DEFAULT_EXCURSION_MIN, True
         wild = bool(EXCURSION_WORDS.search(f"{p.name} {p.kind}"))
         if wild and (p.travel_min is None or p.travel_min < 60):
             p.travel_min, p.travel_estimated = 60, p.travel_min is None  # outdoor sites are never a short hop
@@ -162,6 +168,8 @@ def annotate_travel(places: list[Place], brief: TripBrief) -> list[Place]:
             p.travel_min = None  # near enough to treat as part of the base city
         if p.travel_min is not None and p.best_time == "sunrise":
             p.best_time = ""  # a day trip cannot be squeezed into a sunrise slot
+        if THEME_RE.search(p.name) and p.duration_min < 300:
+            p.duration_min = 300  # a theme park or similar is a whole-day outing
         if p.travel_min is not None:
             p.duration_min = max(p.duration_min, MIN_EXCURSION_VISIT_MIN)  # a day trip is worth a real visit
         out.append(p)

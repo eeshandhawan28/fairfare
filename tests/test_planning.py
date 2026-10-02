@@ -98,7 +98,7 @@ def test_repair_loop_removes_offender_and_replans():
 
 
 def test_full_day_outing_gets_its_own_day_and_is_never_silently_dropped():
-    places = [P("Big Trip", effort=1, minutes=300, city="Far"), P("Small", minutes=60)]
+    places = [P("Big Trip", effort=1, minutes=300, city="Far"), P("Small", minutes=60, city="Far")]
     plan = Planner(brief(ages=(30, 30)), places, []).plan()
     day = next(d for d in plan.days if any(b.place == "Big Trip" for b in d.blocks))
     acts = [b for b in day.blocks if b.kind == "activity"]

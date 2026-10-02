@@ -151,6 +151,7 @@ class Place(BaseModel):
     closed_days: list[str] = Field(default_factory=list)  # weekday names the quote says it is closed
     evidence: list[Evidence] = Field(default_factory=list)
     notes: str = ""
+    tags: list[str] = Field(default_factory=list)  # interests this place was found for
 
     @property
     def sources(self) -> list[str]:
