@@ -99,7 +99,7 @@ def build_plan_graph(researcher: Researcher, static_notices: list[ClosureNotice]
         for p in s["places"]:
             h = hours.get(p.name)
             if h:
-                p = p.model_copy(update={k: v for k, v in h.items() if v})
+                p = p.model_copy(update={k: v for k, v in h.items() if v or k == "travel_estimated"})
             places.append(p)
         return {"notices": list(static_notices) + live, "checked": venues, "places": places}
 

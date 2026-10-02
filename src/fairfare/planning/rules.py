@@ -33,7 +33,7 @@ def dinner_window(brief: TripBrief) -> tuple[int, int]:
 
 def day_end(brief: TripBrief) -> int:
     """Last minute an activity may end: an hour before dinner."""
-    return dinner_window(brief)[0] - 60
+    return dinner_window(brief)[0] - 45
 
 
 def hm(minutes: int) -> str:
@@ -83,7 +83,8 @@ def max_excursion_hours(brief: TripBrief) -> float:
 
 def place_cost(p: Place) -> int:
     """Effort units. A full-day outing counts as four hours at its effort level."""
-    hours = 4 if is_full_day(p) else math.ceil(p.duration_min / 60)
+    hours = (max(4, math.ceil(excursion_hours(p) * 0.9)) if is_excursion(p) else 4) if is_full_day(p) \
+        else math.ceil(p.duration_min / 60)
     return p.effort * hours
 
 
@@ -134,4 +135,4 @@ def closed_on(place: Place, day: date, notices: list[ClosureNotice]) -> ClosureN
 
 
 def transfer_minutes(prev_city: str, city: str) -> int:
-    return 60 if prev_city and city and prev_city.lower() != city.lower() else 40
+    return 60 if prev_city and city and prev_city.lower() != city.lower() else 30

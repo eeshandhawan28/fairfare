@@ -112,6 +112,7 @@ def render_markdown(plan: TripPlan, audit_report: Optional[str] = None) -> str:
     out.append("## Day by day")
     ideas = [c.subject for c in plan.food if str(c.data.get("kind", "")).lower() in ("restaurant", "market")] or \
         [f"try {c.subject}" for c in plan.food]
+    dinners = [c.subject for c in plan.food if str(c.data.get("kind", "")).lower() == "restaurant"] or ideas
     stay = plan.stay[0].subject if plan.stay else ""
     used_ideas: set[str] = set()
     for i, d in enumerate(plan.days, 1):
@@ -121,9 +122,12 @@ def render_markdown(plan: TripPlan, audit_report: Optional[str] = None) -> str:
             extra = ""
             if blk.kind == "meal" and ideas:
                 today = " ".join(b.title.lower() for b in d.blocks if b.kind == "activity")
-                fresh = [x for x in ideas if x not in used_ideas and x.lower() not in today] or \
-                    [x for x in ideas if x.lower() not in today] or ideas
-                pick = fresh[:2]
+                pool = dinners if blk.title.lower().startswith("dinner") else ideas
+                fresh = [x for x in pool if x not in used_ideas and x.lower() not in today]
+                if len(fresh) < 2:
+                    used_ideas.clear()  # rotation exhausted: start a new one rather than repeat one pair forever
+                    fresh = fresh + [x for x in pool if x not in fresh and x.lower() not in today]
+                pick = fresh[:2] or pool[:2]
                 used_ideas.update(pick)
                 extra = " Ideas: " + " or ".join(pick) + " (see Where to eat / Dishes to try)."
             if blk.kind == "arrival" and stay:

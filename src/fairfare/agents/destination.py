@@ -104,10 +104,11 @@ def research_places(r: Researcher, brief: TripBrief) -> list[Place]:
     dest = brief.destination
     who = "families with older parents" if any(t.age >= 60 for t in brief.travellers) else \
         "families with young children" if any(t.age < 12 for t in brief.travellers) else "visitors"
+    interests = [i for i in brief.interests if i.lower() not in ("food", "street food", "eating")]
     queries = [f"top things to do in {dest}", f"{dest} attractions {who}",
-               f"{dest} day trips from the city"] + [f"{dest} {i}" for i in brief.interests[:3]]
+               f"{dest} day trips from the city"] + [f"best {i} places in {dest}" for i in interests[:4]]
     if getattr(r.search, "digest_mode", False):
-        queries = queries[:5]
+        queries = [queries[0], queries[1]] + queries[3:7] + [queries[2]]  # interests before generic day trips
     claims = r.run(queries, "place", PLACES_INSTR.format(destination=dest), PLACES_SCHEMA)
     places = merge_similar([claim_to_place(c) for c in claims])
     return llm_merge_aliases(r.llm, places)

@@ -1,6 +1,7 @@
 """Deterministic family-aware scheduler. Picks from *verified* places only."""
 from __future__ import annotations
 
+import math
 import re
 from datetime import date
 
@@ -10,6 +11,7 @@ from fairfare.planning.places import MAX_ONE_WAY_MIN, annotate_travel, is_food_i
 
 STEEP_WORDS = ("steep", "stairs", "steps", "uphill", "climb", "strenuous", "demanding", "scramble", "hilltop",
                "highest point", "cobbled hill")
+WILD_RE = re.compile(r"\b(mountains?|gorge|canyon|waterfalls?|national park|nature (park|reserve)|trek\w*|volcano)\b", re.I)
 HIKE_RE = re.compile(r"\b(hike|hikes|hiking|trek|treks|trekking|trail|trails|summit|ridge|peak|cliff)\b", re.I)
 MASS_VISITORS_RE = re.compile(r"\b\d+(\.\d+)?\s*million\s+(annual\s+|yearly\s+)?(visitors|tourists|people)\b|\bmillions of visitors\b", re.I)
 CROWD_WORDS = ("crowd", "busiest", "most visited", "most popular", "long queue", "packed with", "tourist hub")
@@ -50,6 +52,8 @@ def eligible(p: Place, brief: TripBrief) -> str | None:
             return "steep, stairs or hard walking (mobility or avoid list)"
         if p.effort >= 3:
             return "strenuous (mobility or avoid list)"
+        if WILD_RE.search(f"{p.name} {p.kind}"):
+            return "wilderness or mountain outing (mobility or avoid list)"
     return None
 
 
@@ -119,6 +123,9 @@ class Planner:
             self.candidates.append(p)
 
     def plan(self) -> TripPlan:
+        self.full_days = 0
+        cities = [p.city.strip().lower() for p in self.candidates if p.city.strip() and p.travel_min is None]
+        self.arrival_city = max(set(cities), key=cities.count) if cities else ""
         days = R.trip_days(self.brief)
         used: set[str] = set()
         last_alt_index = -10
@@ -130,6 +137,7 @@ class Planner:
             picks, cap = self._pick(day, i, len(days), role, used, last_alt_index, last_full_index)
             if picks and R.is_full_day(picks[0]):
                 last_full_index = i
+                self.full_days += 1
             if any((p.altitude_m or 0) >= R.ALTITUDE_M for p in picks):
                 last_alt_index = i
             used.update(p.name for p in picks)
@@ -208,6 +216,8 @@ class Planner:
                 continue  # flight times are unknown: no fixed activity on the way out (see the optional suggestion)
             if role == "arrival" and any(m.lower() in p.name.lower() for m in self.brief.must_do):
                 continue  # never spend a must-do on the tired arrival evening
+            if role == "arrival" and p.city and self.arrival_city and p.city.lower() != self.arrival_city:
+                continue  # no cross-city hop on the tired arrival evening
             if R.closed_on(p, day, self.notices):
                 continue
             high = (p.altitude_m or 0) >= R.ALTITUDE_M
@@ -220,8 +230,11 @@ class Planner:
                 continue
             if R.is_full_day(p) and (picks or role != "full"):
                 continue  # a full-day outing needs a whole ordinary day to itself
-            if R.is_full_day(p) and R.needs_long_rest(self.brief) and i - last_full < 2:
-                continue  # no back-to-back full-day outings for older or limited-mobility travellers
+            if R.is_full_day(p) and (R.needs_long_rest(self.brief) or self.brief.pace != "packed") and i - last_full < 2:
+                continue  # no back-to-back full-day outings unless the pace is packed and the group is fit
+            if R.is_full_day(p) and self.brief.pace != "packed" and self.full_days >= math.ceil(
+                    n / (4 if self.brief.pace == "relaxed" else 3)):
+                continue  # keep day trips a minority of the trip
             if picks and R.is_full_day(picks[0]):
                 continue
             if not R.is_full_day(p):
