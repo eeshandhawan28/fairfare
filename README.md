@@ -6,14 +6,22 @@ Cost-transparent, verified, family-aware trip planning. Built after a family tri
 
 ## Status
 
-Early spike. What works today:
+Working end to end, not production. What exists:
 
-- Parse a free-text quote into line items (LLM, provider-agnostic).
-- Audit prices against reference bands (deterministic).
-- Flag closures that overlap the trip dates (deterministic).
-- Markdown report, worst issues first.
+- **Quote auditor**: parse a quote, benchmark lines against destination-scoped price bands (FX-converted), flag closures, say which lines could not be benchmarked (bundles, multi-day lines), list what the quote leaves out.
+- **Trip planner** (LangGraph): research places, visa, transport, costs, stay, food, contacts, practical tips and steep/stairs access in parallel; verify closures and hours per venue; schedule deterministically for the group (mobility, ages, pace, rest, early dinners, day trips with real travel time); check and repair; render a pack (md/html/whatsapp).
+- **Booking agent**: drafts hotel/venue messages and wa.me or mailto links. Never sends or pays; approval is bound to the message hash.
+- FastAPI service and Next.js UI in `web/`.
 
-What is still stubbed: `data/reference_prices.json` is **synthetic** and `data/closures.json` holds one **unconfirmed** entry. Live price and closure retrieval is the next milestone. See [docs/PLAN.md](docs/PLAN.md).
+Run it with the Claude CLI backend: `FAIRFARE_MODEL=claude-cli/haiku FAIRFARE_SEARCH=claude-cli fairfare serve`.
+
+### Honest limits
+
+- Evidence is **web-search digests**, not fetched pages (page fetching was unavailable in the build sandbox). Closure confidence is capped at "low" and every pack says so.
+- `data/reference_prices.json` is **synthetic**; live price bands are search-derived and rough. `data/closures.json` has one **unconfirmed** entry (Shymbulak).
+- Place pools are small (about 15-35 per destination), so interests can go unserved; the pack says so instead of hiding it.
+- Phone calling is an interface only. A local Ollama model was not reachable in the build environment.
+- Tested by simulated traveller agents (6 personas, 5 rounds); scores moved from about 3-6/10 toward fewer hard errors, but no real-traveller validation yet.
 
 ## Design rule
 
