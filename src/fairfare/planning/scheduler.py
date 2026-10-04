@@ -17,6 +17,10 @@ MASS_VISITORS_RE = re.compile(r"\b\d+(\.\d+)?\s*million\s+(annual\s+|yearly\s+)?
 CROWD_WORDS = ("crowd", "busiest", "most visited", "most popular", "long queue", "packed with", "tourist hub")
 
 
+def _theme(p: Place) -> str:
+    return "spa" if re.search(r"\b(hammam|spa)\b", f"{p.name} {p.kind}", re.I) else ""
+
+
 def _stems(text: str) -> set[str]:
     def stem(w: str) -> str:
         if w.endswith("ies"):
@@ -161,6 +165,8 @@ class Planner:
 
     def plan(self) -> TripPlan:
         self.full_days = 0
+        self._used: set[str] = set()
+        self.kind_counts: dict[str, int] = {}
         cities = [p.city.strip().lower() for p in self.candidates if p.city.strip() and p.travel_min is None]
         self.arrival_city = max(set(cities), key=cities.count) if cities else ""
         days = R.trip_days(self.brief)
@@ -178,6 +184,7 @@ class Planner:
             if any((p.altitude_m or 0) >= R.ALTITUDE_M for p in picks):
                 last_alt_index = i
             used.update(p.name for p in picks)
+            self._used = used
             dp = self._layout(day, role, picks, cap)
             prev_city = self._city_hop(dp, picks, prev_city)
             dp.plan_b = self._plan_b(day, used)
@@ -257,6 +264,9 @@ class Planner:
                 continue  # no cross-city hop on the tired arrival evening
             if R.closed_on(p, day, self.notices):
                 continue
+            theme = _theme(p)
+            if theme and self.kind_counts.get(theme, 0) >= 2:
+                continue  # no more than two of the same experience (e.g. hammams) per trip
             high = (p.altitude_m or 0) >= R.ALTITUDE_M
             if high and (not R.altitude_allowed(i, n) or (sensitive and i - last_alt < 2)):
                 continue
@@ -284,6 +294,8 @@ class Planner:
                 if role != "full" and (p.effort > 1 or p.duration_min > 120):
                     continue  # arrival and departure days stay light
             picks.append(p)
+            if theme:
+                self.kind_counts[theme] = self.kind_counts.get(theme, 0) + 1
             spent += cost
             city = city or p.city
         picks.sort(key=lambda p: (p.best_time != "sunrise", -p.effort))
@@ -326,7 +338,7 @@ class Planner:
                                     title="Arrive, transfer to hotel, check in", notes="Adjust to your flight times."))
             self._emit(blocks, picks, windows_for(role, self.brief))
             if role == "departure":
-                opt = self._plan_b(day, set())
+                opt = self._plan_b(day, set(self._used))
                 hint = opt.replace("Plan B for weather or a closure:", "Optional if your flight is after 15:00:")
                 blocks.append(Block(start="12:00", end="13:00", kind="departure",
                                     title="Transfer to airport",

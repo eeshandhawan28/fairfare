@@ -31,6 +31,10 @@ COST_CATEGORIES = {"airport_transfer": "airport transfer", "taxi": "taxi", "publ
                    "entry_ticket": "entry tickets", "meal": "a meal", "sim_card": "SIM card", "hotel": "hotel"}
 
 
+def brief_diet(plan) -> list[str]:
+    return list(plan.brief.dietary) + list(plan.brief.interests)
+
+
 def load_label(load: int, cap: int) -> str:
     if cap <= 0 or load <= 0:
         return "light"
@@ -112,7 +116,12 @@ def render_markdown(plan: TripPlan, audit_report: Optional[str] = None) -> str:
     out.append("## Day by day")
     ideas = [c.subject for c in plan.food if str(c.data.get("kind", "")).lower() in ("restaurant", "market")] or \
         [f"try {c.subject}" for c in plan.food]
-    dinners = [c.subject for c in plan.food if str(c.data.get("kind", "")).lower() == "restaurant"] or ideas
+    veg = any("vegetarian" in x.lower() or "vegan" in x.lower() for x in list(brief_diet(plan)))
+    if veg:
+        ok = [c for c in plan.food if str(c.data.get("vegetarian", "")).lower() != "no"]
+        ok.sort(key=lambda c: str(c.data.get("vegetarian", "")).lower() != "yes")
+        ideas = [c.subject for c in ok if str(c.data.get("kind", "")).lower() in ("restaurant", "market")] or ideas
+    dinners = [c.subject for c in (ok if veg else plan.food) if str(c.data.get("kind", "")).lower() == "restaurant"] or ideas
     stay = plan.stay[0].subject if plan.stay else ""
     used_ideas: set[str] = set()
     for i, d in enumerate(plan.days, 1):
